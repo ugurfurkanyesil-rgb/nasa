@@ -11,10 +11,12 @@ import {
 import { sunPosition, sunriseSunset } from './marsTime.js';
 import { shadowMask, isShadowedAt, heightMax } from './shadows.js';
 import { evaWindowTemps } from './climate.js';
-import { param, MODE_WEIGHTS, SCIENCE_PARAMS, getEvaProfile } from '../config/marswalkProfile.js';
+import { param, MODE_WEIGHTS, SCIENCE_PARAMS, getEvaProfile, getObstacleBufferM } from '../config/marswalkProfile.js';
+import { inflate } from './hazardMap.js';
 import { walkTimeS, maxSpeedMs, pathWalkStats } from './walkModel.js';
 import { homeTimeMaps, walkbackProfile, descendToHome } from './walkback.js';
-import { planScienceEva, tagScore } from './science.js';
+import { planScienceEva, tagScore, tagWeight, tagRole } from './science.js';
+import { getObjective, objectiveWeights, primaryRelevance } from '../config/objectives.js';
 import { chemAnomalies } from './chemistry.js';
 import { evaDoseMSv, careerFraction } from './radiation.js';
 import { carryCheck, ROVER } from '../config/mission.js';
@@ -119,8 +121,12 @@ export function buildIlluminationMap(sunAngleDeg, hMap, elevationDeg) {
 // DEM: cells steeper than the Marswalk slope limit (config/marswalkProfile.js).
 // Built once and reused. Cells with value 1 are completely blocked.
 let _wallMap = null;
+let _wallBufferM = 0;
 export function getWallMap() {
-  if (_wallMap) return _wallMap;
+  // The rock keep-out buffer (Mission setup) changes the walls: rebuild when it changes
+  if (_wallMap && _wallBufferM === getObstacleBufferM()) return _wallMap;
+  _wallBufferM = getObstacleBufferM();
+  _costCache = {};
   _wallMap = new Uint8Array(GRID_RES * GRID_RES);
   if (IS_DEM) {
     const slope = buildSlopeMap(buildHeightMap());       // rise/run
@@ -130,7 +136,11 @@ export function getWallMap() {
     const rock = SITE.layers?.rock?.values;
     if (rock && rock.length === _wallMap.length) {
       const lim = param('maxRockReliefM');
-      for (let i = 0; i < rock.length; i++) if (rock[i] > lim) _wallMap[i] = 1;
+      const rockWall = new Uint8Array(rock.length);
+      for (let i = 0; i < rock.length; i++) if (rock[i] > lim) rockWall[i] = 1;
+      // Optional keep-out buffer around each rock obstacle (0 = off, the default)
+      const grown = _wallBufferM > 0 ? inflate(rockWall, GRID_RES, _wallBufferM / CELL_SIZE) : rockWall;
+      for (let i = 0; i < rock.length; i++) if (grown[i]) _wallMap[i] = 1;
     }
     // buildSlopeMap leaves the 1-cell border at 0; block it so routes never
     // run along the unverifiable grid edge.
@@ -453,8 +463,10 @@ export function getHomeMaps(homeX, homeZ, hMap) {
   const { col, row } = worldToGrid(homeX, homeZ);
   const homeIdx = row * GRID_RES + col;
   // walk-back times depend on the walking speed, i.e. on the active EVA limit profile
-  if (_homeMaps?.homeIdx === homeIdx && _homeMaps.profile === getEvaProfile()) return _homeMaps;
-  _homeMaps = { ...homeTimeMaps(homeIdx, hMap, getWallMap(), GRID_RES, CELL_SIZE), profile: getEvaProfile() };
+  // (and on the walls, i.e. on the rock keep-out buffer)
+  const wall = getWallMap();
+  if (_homeMaps?.homeIdx === homeIdx && _homeMaps.profile === getEvaProfile() && (_homeMaps.bufferM ?? 0) === getObstacleBufferM()) return _homeMaps;
+  _homeMaps = { ...homeTimeMaps(homeIdx, hMap, wall, GRID_RES, CELL_SIZE), profile: getEvaProfile(), bufferM: getObstacleBufferM() };
   return _homeMaps;
 }
 /** Last computed home maps (for the EVA Range heatmap), or null. */
@@ -647,6 +659,7 @@ export function planAllRoutes(waypoints, slopeMap, craterMask, hMap, sunAngleDeg
     const homeMaps = getHomeMaps(home.x, home.z, hMap);
     const result = {};
     for (const mode of (opts.modes || ['SAFE','ECO','FAST','AUTO'])) {
+      getWallMap();   // rebuilds walls (and clears this cache) if the rock buffer changed
       const cacheKey = `DEM_${mode}`;
       if (!_costCache[cacheKey]) _costCache[cacheKey] = buildDemMultMap(mode, slopeMap);
       const w = MODE_WEIGHTS[mode] || MODE_WEIGHTS.AUTO;
@@ -707,34 +720,78 @@ function chemCellMap() {
   return m;
 }
 
+/** Grid cell → ChemCam targets in it, each with its standout tags (objective "re-visit"). */
+function chemTargetMap() {
+  if (!SITE.chemistry) return null;
+  const anom = new Map();
+  for (const a of chemAnomalies(SITE.chemistry)) {
+    if (!anom.has(a.target.name)) anom.set(a.target.name, []);
+    anom.get(a.target.name).push(a.tag);
+  }
+  const m = new Map();
+  for (const t of SITE.chemistry.targets || []) {
+    const i = cellIndexAt(t.x, t.z);
+    if (!m.has(i)) m.set(i, []);
+    m.get(i).push({ name: t.name, sol: t.sol, anomalies: anom.get(t.name) || [] });
+  }
+  return m;
+}
+
 /**
  * Science EVA (Stage 6): best set + order of geology stops from `home` within the
  * EVA budget (see utils/science.js). Serializable result (worker → main thread).
- * opts: { dwellMin, budgetS } override SCIENCE_PARAMS / the EVA duration.
+ * opts: { dwellMin, budgetS } override SCIENCE_PARAMS / the EVA duration;
+ *       objective: id from config/objectives.js — changes candidate ranking and scoring.
+ *       No objective (or 'survey') = the original unit-diversity planner, unchanged.
  */
 export function planScience(home, hMap, opts = {}) {
   const geo = SITE.geology;
   if (!IS_DEM || !geo) return null;
+  const obj = opts.objective ? getObjective(opts.objective) : null;
+  const objO = obj?.options || {};
+  const weights = objectiveWeights(obj, SCIENCE_PARAMS.weights);
   const homeMaps = getHomeMaps(home.x, home.z, hMap);
   const dwellS = (opts.dwellMin ?? SCIENCE_PARAMS.dwellMin) * 60;
   const budgetS = opts.budgetS ?? param('evaDurationH') * 3600;
   const r = planScienceEva(geo, homeMaps, hMap, getWallMap(), {
     cellM: CELL_SIZE, budgetS, dwellS, maxRadialM: param('maxRadialDistanceKm') * 1000,
-    weights: SCIENCE_PARAMS.weights, interiorR: SCIENCE_PARAMS.interiorR,
-    minHomeDistM: SCIENCE_PARAMS.minHomeDistM, maxCandidates: SCIENCE_PARAMS.maxCandidates,
+    weights, interiorR: SCIENCE_PARAMS.interiorR,
+    minHomeDistM: SCIENCE_PARAMS.minHomeDistM, maxCandidates: objO.maxCandidates ?? SCIENCE_PARAMS.maxCandidates,
     minerals: SITE.layers?.minerals || null,
     chemCells: chemCellMap(),
-    maxChemCandidates: SCIENCE_PARAMS.maxChemCandidates,
+    // An objective whose rules never score ChemCam standouts gets no "re-sample" candidates:
+    // such a stop could only be chosen for its unit, under a misleading chemistry label.
+    maxChemCandidates: objO.maxChemCandidates
+      ?? (obj?.rules && !obj.rules.some(rr => rr[0].startsWith('X:')) ? 0 : SCIENCE_PARAMS.maxChemCandidates),
+    chemTargets: objO.chemTargets ? chemTargetMap() : null,
+    maxTargetCandidates: objO.maxTargetCandidates ?? 0,
+    compositeTags: !!objO.compositeTags,
+    relevance: obj?.rules ? (tags) => primaryRelevance(obj, tags) : null,
     maxReturnS: opts.maxReturnS ?? null,
   });
   const toWorld = (c) => { const { wx, wz } = gridToWorld(c.col, c.row); return { ...c, x: wx, z: wz }; };
+  // What each stop adds, in walking order: the tags it is the FIRST stop to sample, with their points
+  // and role under the objective — the "why was this stop selected" of the stop card.
+  const seen = new Set();
+  const stops = r.stops.map((st) => {
+    const contrib = [];
+    for (const t of new Set(st.tags)) {
+      const w = tagWeight(t, weights);
+      if (w > 0 && !seen.has(t)) { seen.add(t); contrib.push({ tag: t, points: w, role: tagRole(t, weights) }); }
+    }
+    return { ...toWorld(st), contrib };
+  });
+  const primaryHit = obj?.rules ? stops.some(st => st.contrib.some(c => c.role === 'primary')) : null;
   return {
+    objective: obj ? obj.id : null,
+    weights,
     candidates: r.candidates.map(toWorld),
-    stops: r.stops.map(toWorld),
+    stops,
     order: r.tour.order,
     score: r.tour.score,
-    maxScore: tagScore([...new Set(r.candidates.flatMap(c => c.tags))], SCIENCE_PARAMS.weights), // all candidates
+    maxScore: tagScore([...new Set(r.candidates.flatMap(c => c.tags))], weights), // all candidates
     tags: r.tour.tags,
+    primaryHit,          // objective chosen: does at least one stop carry its primary evidence?
     totalS: r.tour.totalS, walkS: r.tour.walkS, dwellTotalS: r.tour.dwellTotalS,
     dwellS, budgetS,
   };

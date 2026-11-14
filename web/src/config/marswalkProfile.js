@@ -184,6 +184,15 @@ let _profile = 'lunar';
 export function setEvaProfile(name) { _profile = EVA_PROFILES[name] ? name : 'lunar'; }
 export function getEvaProfile() { return _profile; }
 
+/**
+ * Keep-out buffer around rock obstacles [m] (Mission setup). 0 = the validated planner unchanged;
+ * > 0 also walls every cell within this distance of a rock-relief wall (utils/hazardMap.js).
+ * Design choice, not a NASA value. Planner worker and main thread each call the setter.
+ */
+let _bufferM = 0;
+export function setObstacleBufferM(m) { _bufferM = Number.isFinite(m) && m > 0 ? Math.min(m, 40) : 0; }
+export function getObstacleBufferM() { return _bufferM; }
+
 /** The full entry (value, source, note) of a parameter in the active profile. */
 export function paramEntry(key) {
   return (_profile === 'mars' && MARS_CONSERVATIVE[key]) || MARSWALK_PROFILE[key];

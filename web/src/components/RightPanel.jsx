@@ -8,7 +8,7 @@
  */
 
 import { buildShareURL } from '../utils/shareLink';
-import { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { TERRAIN_SIZE, CRATERS, IS_DEM } from '../three/terrainGenerator';
 import { PANEL_W, MAP_S, fs, UI_SCALE, SHEET_VH, useNarrow } from '../ui/layout';
 import { fmtHM, fmtSignedHM, fmtHourMin } from '../utils/format';
@@ -28,6 +28,16 @@ import { MODE_WEIGHTS, MARSWALK_PROFILE, SCIENCE_PARAMS, param, EVA_PROFILES, MA
 import { msAtLtst, sunriseSunset, ltst as ltstOf, j2000tt } from '../utils/marsTime';
 import { airTemp, diurnalCurve, K_TO_C, climateInstrument, climateHeightM } from '../utils/climate';
 import { SITE } from '../three/terrainGenerator';
+import { WorkflowSteps, ObjectivePanel, ProvenancePanel, HazardPanel, StopCards, SafetyPanel, RadiationPanel, MissionSummaryPanel, StatusBadge } from './MissionPanels';
+import { useSpaceWeather } from './useSpaceWeather';
+import { siteProvenance, findRecord } from '../config/provenance';
+import { getObjective } from '../config/objectives';
+import { evaluateMission } from '../utils/missionStatus';
+import { stopCard } from '../utils/stopRationale';
+import { missionSummary } from '../utils/missionSummary';
+import { getSiteHazards, routeHazardsFor } from '../utils/siteHazards';
+import { HAZARD_LAYER } from '../utils/heatmaps';
+import { getEvaProfile } from '../config/marswalkProfile';
 
 const HALF = TERRAIN_SIZE / 2;
 const PW   = PANEL_W;   // panel width (src/ui/layout.js)
@@ -382,7 +392,7 @@ function DiurnalTempChart({ bin, ltstH }) {
   );
 }
 
-function MarsTimePanel({ sun, evaStartMs, setEvaStartMs }) {
+function MarsTimePanel({ sun, evaStartMs, setEvaStartMs, sw = null, swState = 'failed', radRecord = null }) {
   const c = SITE.meta?.center;
   if (!c || !sun || evaStartMs == null) return null;
   const lon = c.lon_deg_east;
@@ -429,7 +439,7 @@ function MarsTimePanel({ sun, evaStartMs, setEvaStartMs }) {
         );
       })()}
       <div style={{ color: '#4a6a4a', fontSize:fs(6.5), marginTop: 2 }}>Mars24 (NASA GISS) · Allison &amp; McEwen 2000</div>
-      <SpaceWeatherRow startMs={evaStartMs} />
+      <RadiationPanel sw={sw} swState={swState} record={radRecord} doseComparison={<DoseComparison />} />
     </div>
   );
 }
@@ -517,39 +527,6 @@ function DoseComparison() {
   );
 }
 
-// ---- Radiation / space weather (DONKI) for the EVA date ----
-function SpaceWeatherRow({ startMs }) {
-  const [live, setLive] = useState(null);
-  let wx = spaceWeatherAt(SITE.spaceWeather, startMs);
-  // Bundled snapshot doesn't cover this date (and it is in the past) → ask DONKI live
-  const needLive = wx.advisory === 'no-data' && startMs < Date.now();
-  useEffect(() => {
-    setLive(null);
-    if (!needLive) return;
-    let on = true;
-    fetchSpaceWeatherLive(startMs).then(r => { if (on) setLive(r); });
-    return () => { on = false; };
-  }, [needLive, Math.floor(startMs / 86400e3)]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (needLive && live) wx = spaceWeatherAt(live, startMs);
-  const row = { display: 'flex', justifyContent: 'space-between', fontSize: fs(7.5), color: 'rgba(160,200,160,0.8)', lineHeight: 1.6 };
-  const tag = wx.advisory === 'postpone' ? { t: '⚠ SEP — POSTPONE EVA', c: '#ff6655' }
-    : wx.advisory === 'clear' ? { t: 'NO SEP ±' + RADIATION.sepWindowDays.value + ' d', c: '#88dd99' }
-    : { t: startMs > Date.now() ? 'future date — no forecast' : 'no DONKI data for this date', c: '#8899aa' };
-  return (
-    <div style={{ marginTop: 4, borderTop: '1px solid rgba(60,90,60,0.3)', paddingTop: 3 }}>
-      <div style={row}><span>Radiation (GCR)</span><span style={{ color: '#e8e0c8' }}>{RADIATION.gcrDoseEquivalentMSvPerDay.value} mSv/day</span></div>
-      <DoseComparison />
-      <div style={row}><span>Space weather</span><span style={{ color: tag.c, fontWeight: 'bold' }}>{tag.t}</span></div>
-      {wx.near.slice(0, 3).map((e, i) => (
-        <div key={i} style={{ fontSize: fs(6.5), color: e.type === 'SEP' ? '#ff8877' : '#9aa8b8' }}>
-          {e.type} · {e.time.slice(0, 16).replace('T', ' ')} UTC{e.class ? ` · ${e.class}` : ''}{e.speedKmS ? ` · ${Math.round(e.speedKmS)} km/s` : ''}{e.type === 'CME' ? ' · arrival at Mars (model)' : ''}
-        </div>
-      ))}
-      <div style={{ color: '#4a6a4a', fontSize: fs(6.5) }}>Curiosity RAD, Hassler et al. 2014 · NASA CCMC DONKI{live ? ' (live)' : ''}</div>
-    </div>
-  );
-}
-
 // ---- Route Analysis ----
 const ROUTE_DESC = {
   SAFE: s => `Low-risk path. Avoids craters + shadows. Avg hazard=${(s.avgHazard||0).toFixed(3)}, slip=${(s.avgSlip||0).toFixed(3)}, slope=${(s.avgSlopeAngle||0).toFixed(1)}°.`,
@@ -559,7 +536,7 @@ const ROUTE_DESC = {
 };
 
 // ---- Marswalk (DEM) stats card body ----
-function MarswalkStats({ mode, s }) {
+function MarswalkStats({ mode, s, ev = null }) {
   const fail = (ok) => ok ? '#88dd99' : '#ff6655';
   return (
     <>
@@ -568,10 +545,10 @@ function MarswalkStats({ mode, s }) {
           Walk <b style={{color:'#e8e0c8'}}>{fmtHM(s.walkTimeS)}</b>
           {s.returnTimeS > 1 && <>{'  '}+ fastest return <b style={{color:fail(s.checks.budget)}}>{fmtHM(s.returnTimeS)}</b></>}
         </span>
-        <span style={{
+        {ev ? <StatusBadge status={ev.status} /> : <span style={{
           fontSize:fs(7.5), fontWeight:'bold', padding:'1px 5px', borderRadius:3,
           color: s.go ? '#0a1a0a' : '#fff', background: s.go ? '#44dd66' : '#cc3322',
-        }}>{s.go ? 'GO' : 'NO-GO'}</span>
+        }}>{s.go ? 'GO' : 'NO-GO'}</span>}
       </div>
       <div style={{color:'rgba(160,200,160,0.7)',fontSize:fs(7),lineHeight:1.55}}>
         Total <span style={{color:fail(s.checks.budget)}}>{fmtHM(s.roundTripS)}</span> = {(s.budgetFrac*100).toFixed(0)}% of the {param('evaDurationH')} h budget
@@ -623,9 +600,11 @@ function MarswalkStats({ mode, s }) {
 }
 
 // ---- Stage 6: science EVA (geology stops) ----
-function SciencePanel({ science, onPlan, busy, dwellMin, setDwellMin, disabled }) {
+function SciencePanel({ science, onPlan, busy, dwellMin, setDwellMin, disabled, objective = null, objectiveStatus = null, cards = [] }) {
   const [pov, setPov] = useState(null);
   const [chemStop, setChemStop] = useState(null);
+  const blocked = !objective ? 'Select a mission objective first (step 1).'
+    : objectiveStatus === 'unsupported' ? 'The selected objective has no supporting data in this site.' : null;
   return (
     <>
       <div style={{display:'flex',alignItems:'center',gap:5,fontSize:fs(7.5),color:'#9ab89a',marginBottom:4}}>
@@ -635,36 +614,33 @@ function SciencePanel({ science, onPlan, busy, dwellMin, setDwellMin, disabled }
         <b style={{color:'#e8e0c8',width:44,textAlign:'right'}}>{dwellMin} min</b>
       </div>
       <div style={{fontSize:fs(6.5),color:'#7a6a4a',marginBottom:4}}>
-        Assumption: no sourced time per stop was found. Score = diversity of distinct units
-        (bedrock {SCIENCE_PARAMS.weights.bedrock}, surface {SCIENCE_PARAMS.weights.surface}, contact {SCIENCE_PARAMS.weights.contact}{SITE.chemistry ? `, ChemCam standout ${SCIENCE_PARAMS.weights.chemistry}` : ''}) — a design choice.
+        Assumption: no sourced time per stop was found.{' '}
+        {objective?.rules
+          ? <>Score = the objective's points per distinct piece of evidence ({objective.short}: primary 5, supporting 1–3) — a design choice.</>
+          : <>Score = diversity of distinct units (bedrock {SCIENCE_PARAMS.weights.bedrock}, surface {SCIENCE_PARAMS.weights.surface}, contact {SCIENCE_PARAMS.weights.contact}{SITE.chemistry ? `, ChemCam standout ${SCIENCE_PARAMS.weights.chemistry}` : ''}) — a design choice.</>}
       </div>
+      {blocked && <div style={{fontSize:fs(7),color:'#ffb347',marginBottom:4}}>{blocked}</div>}
       {pov && <PovViewer stop={pov.stop} label={pov.label} onClose={() => setPov(null)} />}
       {chemStop && <ChemistryCard stop={chemStop.stop} label={chemStop.label} onClose={() => setChemStop(null)} />}
-      <Btn disabled={busy || disabled} onClick={onPlan}
+      <Btn disabled={busy || disabled || !!blocked} onClick={onPlan}
         style={{width:'100%',background:'rgba(70,40,0,0.55)',borderColor:'rgba(230,150,60,0.6)',color:'#ffbb66',fontWeight:'bold'}}>
         {busy ? 'SEARCHING…' : 'PLAN SCIENCE EVA'}
       </Btn>
       {science && (
         <div style={{marginTop:5,fontSize:fs(7.5),lineHeight:1.5,color:'#b8c8b0'}}>
           <div>
+            {getObjective(science.objective)?.label || 'General site survey'}:{' '}
             {science.stops.length} stops / {science.candidates.length} candidates ·
             {' '}score <b style={{color:'#ffcc66'}}>{science.score}</b>/{science.maxScore}
             {' '}· plan {fmtHM(science.totalS)}
           </div>
-          <ol style={{margin:'3px 0 0',paddingLeft:14,color:'#e0d0b0'}}>
-            {science.stops.map((st, i) => (
-              <li key={i} title={st.tags.join('\n')}><b style={{color:'#ffb347'}}>S{i + 1}</b> {st.label}
-                {nearestPanorama(st.x, st.z) && (
-                  <span onClick={() => setPov({ stop: st, label: `S${i + 1} ${st.label}` })}
-                    style={{marginLeft:4,color:'#ffcc88',cursor:'pointer',textDecoration:'underline'}}>ground view</span>
-                )}
-                {hasChemistry(st.x, st.z) && (
-                  <span onClick={() => setChemStop({ stop: st, label: `S${i + 1} ${st.label}` })}
-                    style={{marginLeft:4,color:'#88ccff',cursor:'pointer',textDecoration:'underline'}}>chemistry</span>
-                )}
-              </li>
-            ))}
-          </ol>
+          {science.primaryHit === false && (
+            <div style={{color:'#ff6655'}}>No reachable stop carries this objective's primary evidence within the EVA limits — the plan below holds context stops only.</div>
+          )}
+          <StopCards cards={cards}
+            hasGround={(c) => !!nearestPanorama(c.x, c.z)} hasChem={(c) => hasChemistry(c.x, c.z)}
+            onGround={(c) => setPov({ stop: { x: c.x, z: c.z }, label: `S${c.n} ${c.name}` })}
+            onChem={(c) => setChemStop({ stop: { x: c.x, z: c.z }, label: `S${c.n} ${c.name}` })} />
           {science.candidates.length > science.stops.length && (
             <div style={{color:'#7a8a7a',marginTop:2}}>
               Not chosen: {science.candidates.filter(c => !science.stops.some(st => st.idx === c.idx)).map(c => c.label).join('; ')}
@@ -676,7 +652,7 @@ function SciencePanel({ science, onPlan, busy, dwellMin, setDwellMin, disabled }
   );
 }
 
-function RouteAnalysis({ routes, activeRoute, onSelect, onCuffCard }) {
+function RouteAnalysis({ routes, activeRoute, onSelect, onCuffCard, evaluations = {} }) {
   if (!routes) return (
     <div style={{fontSize:fs(8),color:'#3a5a3a',textAlign:'center',padding:'8px 0'}}>
       Plan a path to see route analysis.
@@ -705,7 +681,8 @@ function RouteAnalysis({ routes, activeRoute, onSelect, onCuffCard }) {
               </div>
               {s && <span style={{color:'rgba(150,200,150,0.7)',fontSize:fs(8)}}>{s.distance.toFixed(1)}m</span>}
             </div>
-            {s && s.walkTimeS !== undefined && <MarswalkStats mode={mode} s={s} />}
+            {s && s.walkTimeS !== undefined && <MarswalkStats mode={mode} s={s} ev={evaluations[mode]} />}
+            {s && s.walkTimeS !== undefined && active && <SafetyPanel evaluation={evaluations[mode]} />}
             {s && s.walkTimeS !== undefined && active && r.path?.length > 1 && (
               <div style={{ marginTop:5, borderTop:'1px solid rgba(60,100,60,0.3)', paddingTop:3 }}
                 title="Elevation along the route (MOLA metres), stops numbered — as Mars Trek plots for a measured path">
@@ -1139,9 +1116,10 @@ function exportPNG() {
   return true;
 }
 
-function exportJSON(waypoints, routes, activeRoute, sunAngleDeg) {
+function exportJSON(waypoints, routes, activeRoute, sunAngleDeg, mission = null) {
   const payload = {
-    version: 1,
+    version: mission ? 2 : 1,
+    ...(mission ? { mission } : {}),
     app: IS_DEM ? 'Martian Map' : 'Moon Rover',
     site: IS_DEM ? { name: SITE.name, center: SITE.meta?.center } : null,
     timestamp: new Date().toISOString(),
@@ -1184,8 +1162,69 @@ export default function RightPanel({
   slopeMap, craterMask, hMap,
   learningModel, routeLog, showToast,
   dustMode, dustHazard, cameraSignalLost, cameraSignalQuality, onTriggerDustHazard, onDustPlaced, onClearDustHazard,
+  objectives = [], objectiveId = null, onSelectObjective = () => {}, objectiveSupport = {},
 }) {
   const narrow = useNarrow();   // phone: bottom sheet under the 3D view
+  // ---- mission-planning state shared by the panels (DEM) ----
+  const [layersReviewed, setLayersReviewed] = useState(false);
+  const [hazardReviewed, setHazardReviewed] = useState(false);
+  const [exported, setExported] = useState(false);
+  const [evaRan, setEvaRan] = useState(false);
+  useEffect(() => { if (evaStatus !== 'idle') setEvaRan(true); }, [evaStatus]);
+  const objective = getObjective(objectiveId);
+  const records = useMemo(() => siteProvenance(SITE), []);
+  const radRecord = findRecord(records, 'rad');
+  const { wx: sw, state: swState } = useSpaceWeather(IS_DEM ? evaStartMs : NaN);
+  const bufferM = mission.obstacleBufferM || 0;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const hazards = useMemo(() => getSiteHazards(), [bufferM, mission.rover, routes]);
+  const evaluations = useMemo(() => {
+    if (!IS_DEM || !routes) return {};
+    const out = {};
+    for (const [mode, r] of Object.entries(routes)) {
+      if (!r?.stats || r.stats.walkTimeS === undefined) continue;
+      out[mode] = evaluateMission(r.stats, {
+        limits: { slopeDeg: param('maxWalkableSlopeDeg'), radialKm: param('maxRadialDistanceKm'), budgetH: param('evaDurationH'), rockM: param('maxRockReliefM') },
+        profile: getEvaProfile(), spaceWeather: sw, swState,
+        radiationCategory: radRecord?.categories?.[0], rockLayer: !!SITE.layers?.rock,
+        routeHazards: routeHazardsFor(r.path),
+      });
+    }
+    return out;
+  }, [routes, sw, swState, radRecord, hazards]); // eslint-disable-line react-hooks/exhaustive-deps
+  const stopCards = useMemo(() => {
+    if (!IS_DEM || !science?.stops) return [];
+    const obj = getObjective(science.objective);
+    return science.stops.map((st, i) => stopCard(st, i, {
+      objective: obj, site: SITE, records, slope: slopeMap, hazardFlags: hazards?.flags || null, dwellS: science.dwellS,
+      latLon: localToLatLon, groundView: nearestPanorama(st.x, st.z),
+    }));
+  }, [science, records, slopeMap, hazards]);
+  const summary = useMemo(() => {
+    const r = routes?.[activeRoute];
+    if (!IS_DEM || !r?.stats || r.stats.walkTimeS === undefined) return null;
+    return missionSummary({ objective: science ? getObjective(science.objective) : null, siteName: SITE.name, siteLabel: SITE.meta?.label,
+      science, mode: activeRoute, stats: r.stats, evaluation: evaluations[activeRoute], routeHazards: routeHazardsFor(r.path),
+      radiationRecord: radRecord, mission, startMs: evaStartMs });
+  }, [routes, activeRoute, science, evaluations, radRecord, mission, evaStartMs]);
+  const workflow = IS_DEM ? [
+    { id: 'objective', label: 'Mission objective', state: objective ? 'done' : 'todo', hint: 'Choose what the EVA is for.' },
+    { id: 'site', label: 'Exploration site', state: 'done', hint: `Loaded: ${SITE.meta?.label}. Switch with the site selector (top left).` },
+    { id: 'crew', label: 'Crew & equipment', state: carryCheck(mission).ok ? 'done' : 'blocked', hint: 'Suit, equipment, EVA limits, rover.' },
+    { id: 'layers', label: 'Data layers', state: layersReviewed ? 'done' : 'todo', hint: 'Open a layer record to review its source and limits.' },
+    { id: 'hazards', label: 'Hazard assessment', state: hazardReviewed ? 'done' : 'todo', hint: 'Review the hazard map and its limits.' },
+    { id: 'stops', label: 'Science stops', state: science ? 'done' : 'todo', hint: 'PLAN SCIENCE EVA.' },
+    { id: 'route', label: 'EVA route', state: routes ? 'done' : 'todo', hint: 'Routes are planned from the stops.' },
+    { id: 'gonogo', label: 'GO / NO-GO', state: evaluations[activeRoute] ? 'done' : 'todo', hint: 'See the safety explanation on the active route card.' },
+    { id: 'eva', label: 'EVA simulation', state: evaRan ? 'done' : 'todo', hint: 'START EVA.' },
+    { id: 'export', label: 'Mission export', state: exported ? 'done' : 'todo', hint: 'Cuff card, JSON mission file, share link.' },
+  ] : [];
+  const goToStep = (id) => {
+    const target = { objective: 'objective', site: 'objective', crew: 'crew', layers: 'layers', hazards: 'hazards', stops: 'stops',
+      route: 'route', gonogo: 'route', eva: 'route', export: 'export' }[id];
+    document.getElementById('mm-sect-' + target)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (id === 'hazards') setHazardReviewed(true);
+  };
   const [pickMode, setPickMode] = useState(false);
   const [cuffMode, setCuffMode] = useState(null);   // route mode whose cuff card is open
   const [shareLabel, setShareLabel] = useState('SHARE LINK');
@@ -1230,6 +1269,12 @@ export default function RightPanel({
       </div>
 
       <div style={{flex:1,padding:'6px 8px',display:'flex',flexDirection:'column',gap:8,overflowY:'auto'}}>
+
+        {IS_DEM && workflow.length > 0 && (
+          <Sect label="Mission workflow">
+            <WorkflowSteps steps={workflow} onGo={goToStep} />
+          </Sect>
+        )}
 
         {/* ── Topographic Map — first thing the user sees ── */}
         <div>
@@ -1323,23 +1368,48 @@ export default function RightPanel({
           </Row>
         </Sect>
 
+        {IS_DEM && objectives.length > 0 && (
+        <Sect label="1 · Mission objective" id="objective">
+          <ObjectivePanel objectives={objectives} value={objectiveId} onChange={onSelectObjective}
+            support={objectiveSupport} disabled={isRoving} />
+        </Sect>
+        )}
+
         {IS_DEM && (
-        <Sect label="Mission setup">
+        <Sect label="3 · Crew & equipment (mission setup)" id="crew">
           <MissionPanel mission={mission} setMission={setMission} start={waypoints?.[0]} disabled={isRoving} />
         </Sect>
         )}
 
+        {IS_DEM && (
+        <Sect label="4 · Data layers & provenance" id="layers">
+          <ProvenancePanel records={records} onOpen={() => setLayersReviewed(true)} />
+        </Sect>
+        )}
+
+        {IS_DEM && hazards && (
+        <Sect label="5 · Hazard assessment" id="hazards">
+          <div onPointerDown={() => setHazardReviewed(true)}>
+            <HazardPanel hazards={hazards} bufferM={bufferM} disabled={isRoving} refreshKey={routes}
+              setBufferM={(m) => setMission({ ...mission, obstacleBufferM: m })}
+              draped={drapeLayer === HAZARD_LAYER}
+              onDrape={setDrapeLayer ? () => setDrapeLayer(drapeLayer === HAZARD_LAYER ? null : HAZARD_LAYER) : null} />
+          </div>
+        </Sect>
+        )}
+
         {hasGeology && (
-        <Sect label="Science EVA">
+        <Sect label="6 · Science stops (science EVA)" id="stops">
           <SciencePanel science={science} onPlan={onPlanScience} busy={isPlanningScience || isPlanning}
-            dwellMin={scienceDwellMin} setDwellMin={setScienceDwellMin} disabled={isRoving} />
+            dwellMin={scienceDwellMin} setDwellMin={setScienceDwellMin} disabled={isRoving}
+            objective={objective} objectiveStatus={objective ? objectiveSupport[objective.id]?.status : null} cards={stopCards} />
         </Sect>
         )}
 
         {/* Sun — DEM: Mars24 time controls; procedural: manual dial */}
         {IS_DEM && sun ? (
         <Sect label="Mars Time">
-          <MarsTimePanel sun={sun} evaStartMs={evaStartMs} setEvaStartMs={setEvaStartMs} />
+          <MarsTimePanel sun={sun} evaStartMs={evaStartMs} setEvaStartMs={setEvaStartMs} sw={sw} swState={swState} radRecord={radRecord} />
         </Sect>
         ) : (
         <Sect label="Sun Direction">
@@ -1499,10 +1569,11 @@ export default function RightPanel({
         </Sect>
 
         {/* Route Analysis */}
-        <Sect label="Route Analysis">
-          <RouteAnalysis routes={routes} activeRoute={activeRoute} onSelect={setActiveRoute} onCuffCard={IS_DEM ? setCuffMode : null}/>
+        <Sect label={IS_DEM ? '7–8 · EVA route & GO / NO-GO' : 'Route Analysis'} id="route">
+          <RouteAnalysis routes={routes} activeRoute={activeRoute} onSelect={setActiveRoute}
+            onCuffCard={IS_DEM ? (m) => { setCuffMode(m); setExported(true); } : null} evaluations={evaluations}/>
           {cuffMode && routes?.[cuffMode]?.stats?.marginS && (
-            <CuffCard mode={cuffMode} route={routes[cuffMode]} startMs={evaStartMs} mission={mission} onClose={() => setCuffMode(null)} />
+            <CuffCard mode={cuffMode} route={routes[cuffMode]} startMs={evaStartMs} mission={mission} evaluation={evaluations[cuffMode] || null} onClose={() => setCuffMode(null)} />
           )}
         </Sect>
 
@@ -1554,7 +1625,13 @@ export default function RightPanel({
         </Sect>
 
         {/* Exports & Share */}
-        <Sect label="Export & Share">
+        {IS_DEM && (
+        <Sect label="Mission summary" id="export">
+          <MissionSummaryPanel summary={summary} />
+        </Sect>
+        )}
+
+        <Sect label={IS_DEM ? '10 · Mission export & share' : 'Export & Share'}>
           <div style={{display:'flex',flexDirection:'column',gap:4}}>
 
             {/* PNG */}
@@ -1576,15 +1653,23 @@ export default function RightPanel({
               if (!routes && waypoints.length < 2) {
                 showToast?.('Plan a route first to export JSON.', 'warning'); return;
               }
-              exportJSON(waypoints, routes, activeRoute, sunAngleDeg);
-              showToast?.('JSON route file saved to Downloads.', 'info');
+              exportJSON(waypoints, routes, activeRoute, sunAngleDeg, IS_DEM ? {
+                objective: objective ? { id: objective.id, label: objective.label, purpose: objective.purpose,
+                  criteria: objective.criteria, uncertainties: objective.uncertainties } : null,
+                summary, evaluation: evaluations[activeRoute] || null, stopCards,
+                provenance: records.map(({ id, name, mission: m, instrument, source, observation, resolution, coverage, dataType, categories, subtype, processing, status, uncertainty, limitations, investigation }) =>
+                  ({ id, name, mission: m, instrument, source, observation, resolution, coverage, dataType, categories, subtype, processing, status, uncertainty, limitations, investigation })),
+                hazardSummary: hazards ? Object.fromEntries(Object.entries(hazards.summary)) : null,
+              } : null);
+              setExported(true);
+              showToast?.(IS_DEM ? 'Mission file (JSON) saved to Downloads.' : 'JSON route file saved to Downloads.', 'info');
             }} style={{
               width:'100%', padding:'6px 0', fontSize:fs(9), fontFamily:'monospace',
               fontWeight:'bold', letterSpacing:0.6, cursor:'pointer', borderRadius:3,
               background:'rgba(0,40,10,0.6)', border:'1px solid rgba(40,180,80,0.55)',
               color:'#66ff99', display:'flex', alignItems:'center', justifyContent:'center', gap:5,
             }}>
-              <span style={{fontSize:fs(11)}}>📄</span> EXPORT JSON
+              <span style={{fontSize:fs(11)}}>📄</span> {IS_DEM ? 'EXPORT MISSION (JSON)' : 'EXPORT JSON'}
             </button>
 
             {/* Share link */}
@@ -1594,7 +1679,7 @@ export default function RightPanel({
               }
               const url = buildShareURL(window.location.href, SITE.name, {
                 waypoints, science: !!science, route: activeRoute, startMs: evaStartMs,
-                mission, dwellMin: scienceDwellMin,
+                mission, dwellMin: scienceDwellMin, objective: science?.objective || objectiveId,
               });
               try {
                 await navigator.clipboard.writeText(url);
@@ -1635,9 +1720,9 @@ export default function RightPanel({
 }
 
 // ---- Micro components ----
-function Sect({ label, children }) {
+function Sect({ label, children, id }) {
   return (
-    <div>
+    <div id={id ? 'mm-sect-' + id : undefined}>
       <Label>{label}</Label>
       <div style={{marginTop:4}}>{children}</div>
       <div style={{height:1,background:'rgba(30,70,30,0.2)',marginTop:8}}/>

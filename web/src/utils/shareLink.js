@@ -11,6 +11,7 @@
  *   t  EVA start, ms since 1970 (UTC) — drives sun, temperature, DONKI
  *   m  mission setup { suit, equipmentKg, rover, limits }
  *   d  time per science stop, min
+ *   o  mission objective id (config/objectives.js); old links without it re-plan as the survey
  *
  * Pure (no React): tested in Node (tests/shareLink.test.mjs).
  */
@@ -32,7 +33,7 @@ const b64urlDecode = (s) => {
 const r1 = (v) => Math.round(v * 10) / 10;
 
 /** @returns {string} the `plan` query value */
-export function encodePlan({ waypoints = [], science = false, route, startMs, mission, dwellMin }) {
+export function encodePlan({ waypoints = [], science = false, route, startMs, mission, dwellMin, objective }) {
   const st = {
     v: VERSION,
     w: (science ? waypoints.slice(0, 1) : waypoints).map((p) => [r1(p.x), r1(p.z)]),
@@ -40,8 +41,12 @@ export function encodePlan({ waypoints = [], science = false, route, startMs, mi
   if (science) st.sci = true;
   if (ROUTES.includes(route)) st.r = route;
   if (Number.isFinite(startMs)) st.t = Math.round(startMs);
-  if (mission) st.m = { suit: mission.suit, equipmentKg: mission.equipmentKg, rover: !!mission.rover, limits: mission.limits };
+  if (mission) {
+    st.m = { suit: mission.suit, equipmentKg: mission.equipmentKg, rover: !!mission.rover, limits: mission.limits };
+    if (mission.obstacleBufferM > 0) st.m.b = mission.obstacleBufferM;
+  }
   if (Number.isFinite(dwellMin)) st.d = dwellMin;
+  if (typeof objective === 'string' && /^[a-z0-9-]{1,40}$/.test(objective)) st.o = objective;
   return b64urlEncode(JSON.stringify(st));
 }
 
@@ -76,6 +81,7 @@ export function decodePlan(search) {
     startMs: num(st.t),
     dwellMin: num(st.d) != null ? Math.min(120, Math.max(1, st.d)) : null,
     mission: null,
+    objective: typeof st.o === 'string' && /^[a-z0-9-]{1,40}$/.test(st.o) ? st.o : null,
   };
   if (st.m && typeof st.m === 'object') {
     out.mission = {
@@ -83,6 +89,7 @@ export function decodePlan(search) {
       ...(num(st.m.equipmentKg) != null ? { equipmentKg: Math.min(100, Math.max(0, st.m.equipmentKg)) } : {}),
       rover: st.m.rover === true,
       ...(st.m.limits === 'mars' || st.m.limits === 'lunar' ? { limits: st.m.limits } : {}),
+      ...([4, 8].includes(st.m.b) ? { obstacleBufferM: st.m.b } : {}),
     };
   }
   return out;

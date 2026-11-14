@@ -10,7 +10,10 @@ import RightPanel from './components/RightPanel';
 import EvaHud from './components/EvaHud';
 import { clearPathCache, getHazardAtPoint, isWallAt, fastestReturnPath, toHomeTimeAt } from './utils/pathfinder';
 import { getTerrainHeight, buildHeightMap, buildSlopeMap, buildCraterMask, IS_DEM, SITE } from './three/terrainGenerator';
-import { param, placeholderParams, assumptionParams, MARSWALK_PROFILE, MARS_CAVEAT, SCIENCE_PARAMS, EVA_CREW, paramEntry, getEvaProfile, setEvaProfile, EVA_PROFILES, MARS_SUIT_COST_RATIO } from './config/marswalkProfile';
+import { param, placeholderParams, assumptionParams, MARSWALK_PROFILE, MARS_CAVEAT, SCIENCE_PARAMS, EVA_CREW, paramEntry, getEvaProfile, setEvaProfile, EVA_PROFILES, MARS_SUIT_COST_RATIO, setObstacleBufferM } from './config/marswalkProfile';
+import { objectivesForSite, objectiveSupport, getObjective } from './config/objectives';
+import { chemAnomalies } from './utils/chemistry';
+import { setHazardContext } from './utils/siteHazards';
 import { LearningModel } from './utils/learningModel';
 import { DUST_STATES, DUST_HAZARD_CONFIG, DEFAULT_HOME, createDustHazard } from './utils/dustHazardModel';
 import { evaluateDustInterference } from './utils/sensorInterferenceEvaluator';
@@ -134,7 +137,7 @@ function SiteBadge({ collapsed, onToggle, narrow = false }) {
       {SITE.layers?.minerals && <div>MINERALS: CRISM dominant mineralogy (MRO) — Parente et al. 2021,{' '}
         <a href={SITE.layers.minerals.source.doi} target="_blank" rel="noreferrer" style={LINK}>Zenodo</a>, CC BY 4.0</div>}
       {SITE.layers?.rock && <div>ROCKS: relief within each 4 m cell of the 1 m HiRISE DTM (proxy for boulders / outcrops)</div>}
-      <div>RADIATION: Curiosity RAD surface dose (Hassler et al. 2014){radiationIsLocal() ? ', measured in this crater' : ''}{SITE.spaceWeather ? ' · space weather: NASA CCMC DONKI' : ''}</div>
+      <div>RADIATION: Curiosity RAD surface dose (Hassler et al. 2014){radiationIsLocal() ? ', measured in this crater (on its floor, ≈0.9 km below this site)' : ' — TRANSFERRED from Gale crater as a reference, not measured here'} · space weather: NASA CCMC DONKI (catalogue, not a forecast)</div>
       {SITE.pov && <div>GROUND VIEW: {SITE.pov.rover || 'Perseverance'} {SITE.pov.rover === 'Curiosity' ? 'Navcam / Mastcam' : 'Navcam / Mastcam-Z'} frames from {SITE.pov.stations.length} rover positions in this site, {SITE.pov.credit?.split(' (')[0] || 'NASA/JPL-Caltech'}</div>}
       {SITE.ortho && <div>ORBITAL IMAGE: {SITE.ortho.source?.title}, {SITE.ortho.source?.creators} ({SITE.ortho.source?.year}){SITE.ortho.source?.doi && <>,{' '}<a href={SITE.ortho.source.doi} target="_blank" rel="noreferrer" style={LINK}>DOI</a></>} · shown at {SITE.ortho.pixel_m} m/px</div>}
       {SITE.chemistry && <div>CHEMISTRY: {SITE.chemistry.source?.title}, {SITE.chemistry.stats?.targets} targets in this site (sols {SITE.chemistry.stats?.sols?.join('–')}), {SITE.chemistry.source?.publisher}</div>}
@@ -180,7 +183,7 @@ export default function App() {
   const [wireframe, setWireframe]   = useState(false);
   const [orthoOn, setOrthoOn]       = useState(!!SITE.ortho);   // HiRISE image on the terrain
   const [cameraMode, setCameraMode] = useState('follow');
-  const [routeLog, setRouteLog]     = useState([`[${ts()}] Ready. ${IS_DEM ? 'Press PLAN SCIENCE EVA, or add waypoints and press PLAN PATH.' : 'Add waypoints and press PLAN PATH.'}`]);
+  const [routeLog, setRouteLog]     = useState([`[${ts()}] Ready. ${IS_DEM ? 'Choose a mission objective, then press PLAN SCIENCE EVA — or add waypoints and press PLAN PATH.' : 'Add waypoints and press PLAN PATH.'}`]);
   const [isRoving, setIsRoving]     = useState(false);
   const [resetKey, setResetKey]     = useState(0);
   const [toasts, setToasts]         = useState([]);
@@ -197,6 +200,22 @@ export default function App() {
   });
   // The active EVA limit set follows Mission setup; set before any planning in this render
   setEvaProfile(mission.limits || 'lunar');
+  setObstacleBufferM(mission.obstacleBufferM || 0);
+  setHazardContext({ bufferM: mission.obstacleBufferM || 0, rover: mission.rover });
+  // Mission objective (config/objectives.js): must be chosen before the science-stop planner runs.
+  // Old shared links with a science plan but no objective re-plan as the original survey.
+  const objectives = useMemo(() => (IS_DEM ? objectivesForSite(SITE.name) : []), []);
+  const objectiveSupportMap = useMemo(() => {
+    const an = SITE.chemistry ? chemAnomalies(SITE.chemistry) : [];
+    const tags = [...new Set(an.map(a => a.tag))];
+    const s = { ...SITE, chemAnomalyCount: tags.length, chemAnomalyTags: tags, chemTargetCount: SITE.chemistry?.targets?.length || 0 };
+    return Object.fromEntries(objectives.map(o => [o.id, objectiveSupport(o, s)]));
+  }, [objectives]);
+  const [objectiveId, setObjectiveId] = useState(() => {
+    const id = SHARED?.objective;
+    if (id && objectives.some(o => o.id === id)) return id;
+    return SHARED?.science ? 'survey' : null;
+  });
   const [isPlanningScience, setIsPlanningScience] = useState(false);
   const autoPlanRef = useRef(false);   // plan as soon as the science waypoints are committed
   const [badgeCollapsed, setBadgeCollapsed] = useState(() => !!window.matchMedia?.(COMPACT_QUERY).matches);   // phones: start collapsed
@@ -475,12 +494,17 @@ export default function App() {
   // (worker), then turns them into waypoints home → stops → home with dwell.
   const handlePlanScience = useCallback(async () => {
     if (!IS_DEM || !SITE.geology) return;
+    const obj = getObjective(objectiveId);
+    if (!obj) { showToast('Select a mission objective first.', 'warning'); return; }
+    if (objectiveSupportMap[obj.id]?.status === 'unsupported') {
+      showToast(`No data in this site supports "${obj.label}".`, 'warning'); return;
+    }
     const home = waypoints[0] || homeWaypointRef.current || { ...DEFAULT_HOME };
     setIsPlanningScience(true);
-    addLog(`Science EVA: choosing stops (dwell ${scienceDwellMin} min/stop)...`);
+    addLog(`Science EVA (${obj.short}): choosing stops (dwell ${scienceDwellMin} min/stop)...`);
     try {
       const t0 = performance.now();
-      const res = await planScience(home, getMaps(), { dwellMin: scienceDwellMin,
+      const res = await planScience(home, getMaps(), { dwellMin: scienceDwellMin, objective: obj.id,
         ...(mission.rover ? { maxReturnS: ROVER.walkbackMin.value * 60 } : {}) });
       if (!res || res.stops.length === 0) {
         showToast('No geology stop fits the EVA budget from this start.', 'warning');
@@ -505,7 +529,22 @@ export default function App() {
     } finally {
       setIsPlanningScience(false);
     }
-  }, [waypoints, getMaps, scienceDwellMin, addLog, showToast, mission]);
+  }, [waypoints, getMaps, scienceDwellMin, addLog, showToast, mission, objectiveId, objectiveSupportMap]);
+
+  // Changing the objective invalidates a science plan made for another one (stops + routes)
+  const handleSelectObjective = useCallback((id) => {
+    if (id === objectiveId) return;
+    setObjectiveId(id);
+    if (science) {
+      const home = waypoints[0] || homeWaypointRef.current;
+      setScience(null);
+      setRoutes(null);
+      setWaypoints(home ? [{ x: home.x, z: home.z }] : []);
+      addLog(`Objective changed to "${getObjective(id)?.label}" — science plan cleared; press PLAN SCIENCE EVA.`);
+    } else {
+      addLog(`Objective: ${getObjective(id)?.label}.`);
+    }
+  }, [objectiveId, science, waypoints, addLog]);
 
   // Shared link: rebuild the plan once on load (same start, same settings → same stops and routes)
   const sharedDoneRef = useRef(false);
@@ -916,6 +955,7 @@ export default function App() {
         onPlanScience={handlePlanScience}
         isPlanningScience={isPlanningScience}
         scienceDwellMin={scienceDwellMin} setScienceDwellMin={setScienceDwellMin}
+        objectives={objectives} objectiveId={objectiveId} onSelectObjective={handleSelectObjective} objectiveSupport={objectiveSupportMap}
         mission={mission} setMission={setMission}
         sunAngleDeg={sunAngleDeg}   setSunAngleDeg={setSunAngleDeg}
         sun={sun} evaStartMs={evaStartMs} setEvaStartMs={setEvaStartMs}

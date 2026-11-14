@@ -29,12 +29,17 @@ export const MAX_EXACT_STOPS = 14;
 
 export { decodeRle, decodeGeology } from '../terrain/geology.js';
 
-/** Tags a stop at cell i samples: bedrock (B:), surface (S:) and, with a CRISM layer, mineral (M:). */
-function cellTags(geo, i, min) {
+/**
+ * Tags a stop at cell i samples: bedrock (B:), surface (S:) and, with a CRISM layer, mineral (M:).
+ * composite → also 'U:<surface> | <bedrock>' (a surface unit ON a given bedrock unit), which the
+ * mission objectives use, e.g. "a ridge inside the boxwork-bearing layer" (config/objectives.js).
+ */
+function cellTags(geo, i, min, composite = false) {
   const t = [];
   const b = geo.bedrockUnits[geo.bedrock[i]], s = geo.surfaceUnits[geo.surface[i]];
   if (b) t.push('B:' + b);
   if (s) t.push('S:' + s);
+  if (composite && b && s) t.push(`U:${s} | ${b}`);
   const m = min && min.code[i] ? min.classes[min.code[i]] : null;
   if (m) t.push('M:' + m);
   return t;
@@ -79,6 +84,7 @@ export function candidateStops(geo, home, o) {
   const hr = (home.homeIdx / n) | 0, hc = home.homeIdx - hr * n;
   const best = new Map();              // anahtar → { idx, rt }
   const bestChem = new Map();          // 'X:<oxide high|low>' → nearest measured rock with that anomaly
+  const bestTarget = new Map();        // 'T:<target name>' → a ChemCam target to re-visit (objective option)
   const consider = (key, i, rt, kind, extra, map = best) => {
     const cur = map.get(key);
     if (!cur || rt < cur.rt) map.set(key, { idx: i, rt, kind, ...extra });
@@ -97,6 +103,8 @@ export function candidateStops(geo, home, o) {
     if (o.minerals && isMineralInterior(o.minerals, n, i, 1)) consider(`M:${o.minerals.code[i]}`, i, rt, 'mineral');
     const chem = o.chemCells?.get(i);
     if (chem) for (const a of chem) consider(`X:${a.tag}`, i, rt, 'chemistry', { chem: a }, bestChem);
+    const tg = o.chemTargets?.get(i);
+    if (tg) for (const t of tg) consider(`T:${t.name}`, i, rt, 'target', { target: t }, bestTarget);
     // Ana kaya kontağı: sağ veya alt komşu farklı (ikisi de haritalı) ana kaya birimi
     const b = geo.bedrock[i];
     if (b) for (const k of [col + 1 < n ? i + 1 : -1, row + 1 < n ? i + n : -1]) {
@@ -107,12 +115,9 @@ export function candidateStops(geo, home, o) {
       }
     }
   }
-  const list = [...best.values()].sort((a, b) => a.rt - b.rt).slice(0, maxC);
-  const maxX = Math.min(o.maxChemCandidates ?? 2, MAX_EXACT_STOPS - list.length);
-  if (maxX > 0) list.push(...[...bestChem.values()].sort((a, b) => a.rt - b.rt).slice(0, maxX));
-  return list.map((c, j) => {
-    const row = (c.idx / n) | 0, col = c.idx - row * n;
-    let tags = cellTags(geo, c.idx, o.minerals), label;
+  const composite = !!o.compositeTags;
+  const finish = (c) => {
+    let tags = cellTags(geo, c.idx, o.minerals, composite), label;
     if (c.kind === 'contact') {
       const [a, b] = c.pair.map(k => geo.bedrockUnits[k]);
       tags = ['B:' + a, 'B:' + b, `C:${a} | ${b}`];
@@ -121,20 +126,69 @@ export function candidateStops(geo, home, o) {
       const a = c.chem;
       tags = [...tags, 'X:' + a.tag];
       label = `Re-sample ${a.name} — ChemCam ${a.tag} (${a.diff > 0 ? '+' : ''}${a.diff.toFixed(1)} wt%, sol ${a.sol})`;
+    } else if (c.kind === 'target') {
+      const t = c.target;
+      tags = [...tags, 'T:' + t.name, ...(t.anomalies || []).map(x => 'X:' + x)];
+      label = `Re-visit ChemCam target ${t.name} (sol ${t.sol})`;
     } else if (c.kind === 'mineral') {
       const unit = tags.filter(t => t[0] === 'B' || t[0] === 'S').reverse().map(t => t.slice(2)).join(' on ');
       label = `${tags.find(t => t[0] === 'M').slice(2)} (CRISM)${unit ? ' — ' + unit : ''}`;
     } else {
-      label = [...tags].reverse().map(t => t.slice(2)).join(' on ') || 'Unmapped';
+      label = tags.filter(t => t[0] !== 'U').reverse().map(t => t.slice(2)).join(' on ') || 'Unmapped';
     }
-    return { id: j, idx: c.idx, row, col, kind: c.kind, tags, label, rtS: c.rt };
+    return { ...c, tags, label };
+  };
+  // Without an objective: nearest first (the original behaviour). With one (o.relevance), the
+  // candidates that carry the objective's evidence come first, nearest first among equals —
+  // so a relevant stop far from home is not cut off by closer, irrelevant ones.
+  const rel = typeof o.relevance === 'function' ? o.relevance : null;
+  const rank = (arr) => arr.map(finish)
+    .map(c => ({ ...c, relevance: rel ? rel(c.tags) : 0 }))
+    .sort((a, b) => (b.relevance - a.relevance) || (a.rt - b.rt));
+  const list = rank([...best.values()]).slice(0, maxC);
+  const maxX = Math.min(o.maxChemCandidates ?? 2, MAX_EXACT_STOPS - list.length);
+  if (maxX > 0) list.push(...rank([...bestChem.values()]).slice(0, maxX));
+  const maxT = Math.min(o.maxTargetCandidates ?? 0, MAX_EXACT_STOPS - list.length);
+  if (maxT > 0) list.push(...rank([...bestTarget.values()]).slice(0, maxT));
+  return list.map((c, j) => {
+    const row = (c.idx / n) | 0, col = c.idx - row * n;
+    const out = { id: j, idx: c.idx, row, col, kind: c.kind, tags: c.tags, label: c.label, rtS: c.rt };
+    if (c.chem) out.chem = c.chem;
+    if (c.target) out.target = c.target;
+    if (rel) out.relevance = c.relevance;
+    return out;
   });
 }
 
-/** Tag weight by prefix: B bedrock, S surface, M mineral (CRISM), X measured chemistry (ChemCam), C contact. */
-function tagWeight(tag, w) {
+const _globs = new Map();
+/** '*' matches any run of characters; everything else is literal. Whole-tag match. */
+export function globMatch(glob, tag) {
+  let re = _globs.get(glob);
+  if (!re) {
+    re = new RegExp('^' + glob.split('*').map(s => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
+    _globs.set(glob, re);
+  }
+  return re.test(tag);
+}
+
+/**
+ * Tag weight. w.rules (optional, from a mission objective): [[glob, weight, role?], …] —
+ * the first rule whose glob matches the tag decides. Otherwise by prefix: B bedrock, S surface,
+ * M mineral (CRISM), X measured chemistry (ChemCam), C contact, U surface-on-bedrock unit,
+ * T a ChemCam target to re-visit. U and T only exist when an objective asks for them.
+ */
+export function tagWeight(tag, w) {
+  if (w.rules) for (const r of w.rules) if (globMatch(r[0], tag)) return r[1];
   return tag[0] === 'B' ? w.bedrock : tag[0] === 'S' ? w.surface : tag[0] === 'M' ? (w.mineral ?? 2)
-    : tag[0] === 'X' ? (w.chemistry ?? 2) : w.contact;
+    : tag[0] === 'X' ? (w.chemistry ?? 2) : tag[0] === 'U' ? (w.composite ?? 0)
+    : tag[0] === 'T' ? (w.target ?? 0) : w.contact;
+}
+
+/** Role of a tag under an objective's rules: 'primary' | 'context' | null (no rule or weight 0). */
+export function tagRole(tag, w) {
+  if (!w.rules) return null;
+  for (const r of w.rules) if (globMatch(r[0], tag)) return r[1] > 0 ? (r[2] || 'context') : null;
+  return null;
 }
 
 /** Farklı etiketler kümesinin puanı. */
@@ -153,9 +207,11 @@ export function optimizeTour(T, stops, o) {
   const k = stops.length;
   if (k > MAX_EXACT_STOPS) throw new Error(`at most ${MAX_EXACT_STOPS} candidates`);
   const { budgetS, dwellS, weights } = o;
-  // Etiketleri bit'lere çevir
+  // Etiketleri bit'lere çevir. Ağırlığı 0 olan etiket skoru hiç değiştirmez: bit almaz
+  // (hedef seçiliyken çok sayıda ilgisiz etiket 30-bit sınırını doldurmasın).
   const tagIds = new Map();
   const stopBits = stops.map(s => s.tags.reduce((m, t) => {
+    if (!(tagWeight(t, weights) > 0)) return m;
     if (!tagIds.has(t)) tagIds.set(t, tagIds.size);
     return m | (1 << tagIds.get(t));
   }, 0));

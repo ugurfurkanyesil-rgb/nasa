@@ -95,10 +95,11 @@ export function careerFraction(mSv) {
  * Space-weather events near an EVA.
  * @param {object|null} wx  space_weather.json: { events: [{type, time, ...}] }
  * @param {number} startMs  EVA start (UTC ms)
- * @returns {{ near: object[], sep: object[], advisory: 'postpone'|'clear'|'no-data', coverage: [string,string]|null }}
+ * @returns {{ near: object[], sep: object[], advisory: 'postpone'|'clear'|'no-data', coverage: [string,string]|null,
+ *            reason: null|'no-source'|'not-covered' }}  reason says WHY there is no data (never "no events")
  */
 export function spaceWeatherAt(wx, startMs) {
-  if (!wx || !Array.isArray(wx.events)) return { near: [], sep: [], advisory: 'no-data', coverage: null };
+  if (!wx || !Array.isArray(wx.events)) return { near: [], sep: [], advisory: 'no-data', coverage: null, reason: 'no-source' };
   const day = 86400e3;
   const w = RADIATION.sepWindowDays.value * day;
   const near = wx.events
@@ -112,6 +113,7 @@ export function spaceWeatherAt(wx, startMs) {
     sep,
     advisory: !covered ? 'no-data' : sep.length ? 'postpone' : 'clear',
     coverage: from && to ? [from, to] : null,
+    reason: covered ? null : 'not-covered',
   };
 }
 

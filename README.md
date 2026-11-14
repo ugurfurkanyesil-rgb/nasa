@@ -24,14 +24,17 @@ The first people to walk on Mars will want the best map possible. **Martian Map*
 | | |
 |---|---|
 | **Sites** | 2 — Jezero crater (Perseverance) and Mount Sharp boxwork, Gale crater (Curiosity) |
+| **Mission objectives** | 5 per site + a general survey; the chosen objective drives which stops the planner picks ([below](#mission-objectives)) |
 | **NASA missions** | 4 — Mars Reconnaissance Orbiter, Mars Odyssey, Mars 2020, Mars Science Laboratory |
 | **Data types** | 8 — topographic, optical, thermal, spectral, geologic, chemical, atmospheric, radiation |
 | **Resolution** | 4 m grid over 2 km × 2 km; rocks from 1 m DTMs; orbital image at 0.5 m/px |
 | **Ground views** | 3,815 rover camera frames from 234 rover positions |
-| **Safety checks** | walk-back margin and point of no return, slope, radius, carry weight, rover reach, sunset, dose, space weather |
+| **Safety checks** | walk-back margin and point of no return, slope, rock obstacles, radius, carry weight, rover reach, sunset — explained as **GO / CONDITIONAL / NO-GO / INSUFFICIENT DATA**; dose and space weather kept separate |
+| **Hazard map** | slope and rock walls, rock buffer zone, closed depressions, steep and rough ground, cells with no rover ground truth, rover reach |
+| **Data provenance** | every layer labelled measured / orbital / derived / transferred / modelled / simulated ([docs/DATA_PROVENANCE.md](docs/DATA_PROVENANCE.md)) |
 | **EVA limit sets** | Lunar ConOps (NASA) or **Mars conservative** (derived for Mars gravity) |
 | **Outputs** | 3D planning view, live EVA HUD, printable **cuff card** (A4 / PDF); works on desktop, tablet and phone |
-| **Tests** | 64 JavaScript + 7 Python, run on every push before deploy |
+| **Tests** | 107 JavaScript (Jezero, Gale and Moon modes tested separately) + 7 Python, run on every push before deploy |
 
 ## Try it
 
@@ -43,14 +46,20 @@ The first people to walk on Mars will want the best map possible. **Martian Map*
 
 **Quick tour**
 
-1. Pick a site at the top left (**JEZERO** or **MOUNT SHARP BOXWORK**).
-2. **Mission setup:** suit, equipment, **EVA limits** (Lunar ConOps / Mars conservative), and whether a pressurized rover waits at the start.
-3. **PLAN SCIENCE EVA** — the planner picks and orders the stops; open **ground view** or **chemistry** on any stop.
-4. Pick a route (SAFE / ECO / FAST / AUTO) and read its **GO / NO-GO** card.
-5. **PRINT CUFF CARD** for the one-page wrist card.
-6. **START EVA** (×1 … ×600, **ABORT EVA**, **SIMULATE DUST DEVIL**).
-7. **Terrain mode** DEM / HiRISE / WIRE, and **Map Layers → DRAPE ON 3D TERRAIN** for minerals, thermal inertia, rocks, geology or slope.
-8. **COMPARE LAYERS** swipes between two layers on the map; **…'S ROUTE & PLACES** shows where the rover itself drove.
+The panel follows the **Mission workflow** shown at its top (click a step to jump to it):
+
+1. **Mission objective** — choose what the EVA is for (e.g. *Olivine–Smectite Alteration Analysis*, *Boxwork Ridge and Hollow Investigation*). The science planner stays disabled until one is chosen; objectives the site's data cannot support are disabled with the reason.
+2. **Exploration site** — top left (**JEZERO** or **MOUNT SHARP BOXWORK**).
+3. **Crew & equipment** — suit, equipment, **EVA limits** (Lunar ConOps / Mars conservative), pressurized rover at the start.
+4. **Data layers & provenance** — open any layer to see its mission, instrument, source, resolution, kind (measured / orbital / derived / transferred …) and limits.
+5. **Hazard assessment** — the hazard map with its thresholds and limits; optional rock keep-out buffer (0 / 4 / 8 m).
+6. **Science stops** — **PLAN SCIENCE EVA**; every stop has a card: why it was chosen, what to investigate, supporting data, evidence, terrain risk, data confidence, uncertainty, **ground view**, **chemistry**.
+7. **EVA route** — SAFE / ECO / FAST / AUTO.
+8. **GO / NO-GO** — the route card explains GO, CONDITIONAL, NO-GO or INSUFFICIENT DATA, constraint by constraint.
+9. **EVA simulation** — **START EVA** (×1 … ×600, **ABORT EVA**, **SIMULATE DUST DEVIL**).
+10. **Mission export** — **PRINT CUFF CARD**, **EXPORT MISSION (JSON)** (summary, stop cards, status, provenance), **SHARE LINK**.
+
+Also: **Terrain mode** DEM / HiRISE / WIRE; **Map Layers → DRAPE ON 3D TERRAIN** (hazard map, minerals, thermal inertia, rocks, geology, slope); **COMPARE LAYERS**; **…'S ROUTE & PLACES**.
 
 ## On a tablet or a phone
 
@@ -82,11 +91,11 @@ The same app adapts to the screen, so it can travel from the habitat display to 
 | How the site was chosen | around the landing site | from Curiosity's own track during the boxwork campaign (sols 4541–4844) |
 | Science objective | sample as many bedrock and surface units, contacts and CRISM minerals as an EVA allows | sample boxwork ridges and hollows, the contacts of the boxwork-bearing layer, and rocks whose ChemCam chemistry stands out |
 | Ground views | 947 Navcam / Mastcam-Z frames, 97 positions | 2,868 Navcam / Mastcam frames, 137 positions |
-| Planned science EVA (SAFE, lunar limits) | 8 stops · 4.11 km · 4 h 45 min · tightest margin 3 h 15 min · **GO** | 6 stops · 2.46 km · 3 h 24 min · tightest margin 4 h 36 min · **GO** |
+| General-survey EVA (SAFE, lunar limits) | 8 stops · 4.11 km · 4 h 45 min · tightest margin 3 h 15 min · all hard constraints pass | 6 stops · 2.46 km · 3 h 24 min · tightest margin 4 h 36 min · all hard constraints pass |
 
 The second site came out of the same pipeline as the first: pick a centre, cut the 1 m DTM and the orbital image, build the 4 m grid, rock relief, units, chemistry, climate and ground views. That is the challenge's "tool or system that generates maps of different locations".
 
-**Which data each site has**
+**Which data each site has** (every layer's mission, instrument, kind and limits: [docs/DATA_PROVENANCE.md](docs/DATA_PROVENANCE.md))
 
 | Layer | Data type | Jezero | Gale |
 |---|---|:---:|:---:|
@@ -95,12 +104,13 @@ The second site came out of the same pipeline as the first: pick a centre, cut t
 | Orbital image (HiRISE, 0.5 m/px) | optical | ✓ | ✓ |
 | Rover ground views | optical | ✓ Perseverance | ✓ Curiosity |
 | Geologic units | geologic | ✓ published map | ✓ derived (see [limits](#honest-limits)) |
-| Dominant minerals (CRISM) | spectral | ✓ | — |
-| Thermal inertia (THEMIS) | thermal | ✓ | — |
-| Rock chemistry (ChemCam) | chemical | — | ✓ 233 targets |
+| Dominant minerals (CRISM) | spectral | ✓ | — investigated, unavailable |
+| Thermal inertia (THEMIS) | thermal | ✓ | — investigated, unavailable |
+| Rock chemistry (ChemCam) | chemical | — (SuperCam / PIXL tables in PDS, not georeferenced yet) | ✓ 233 targets |
 | Air temperature climatology | atmospheric | ✓ MEDA | ✓ REMS |
 | Surface radiation (RAD) | radiation | ✓ transferred from Gale | ✓ measured here |
 | Space weather (DONKI) | radiation | ✓ | ✓ |
+| Hazard map (walls, buffer zone, depressions, steep / rough, ground truth) | derived safety layer | ✓ | ✓ |
 
 ## How it answers the challenge
 
@@ -108,7 +118,7 @@ The second site came out of the same pipeline as the first: pick a centre, cut t
 |---|---|
 | A layered, integrated view of a location or route, from **multiple NASA science missions** | Two 2 km × 2 km sites at 4 m resolution; every layer is resampled onto the same grid: **MRO** (HiRISE terrain and images, CRISM minerals), **Mars Odyssey** (THEMIS thermal inertia), **Mars 2020** (geologic map, MEDA air temperature, Navcam / Mastcam-Z images, traverse), **Curiosity** (RAD radiation, REMS air temperature, ChemCam chemistry, Navcam / Mastcam images, traverse) |
 | **At least three kinds of data** | Eight: **topographic** (HiRISE DTM, rock relief), **optical** (HiRISE orbital image, rover cameras), **thermal** (THEMIS), **spectral** (CRISM), **geologic** (Mars 2020 map; derived units at Gale), **chemical** (ChemCam), **atmospheric** (MEDA, REMS), **radiation** (RAD + DONKI space weather) |
-| Identify a **science objective** and a location | Jezero: as many distinct units, contacts and CRISM minerals (olivine, olivine–smectite, pyroxene) as one EVA allows. Gale: the boxwork-bearing layer — ridges, hollows, its contacts — plus re-sampling the rocks whose chemistry Curiosity found unusual. The Gale site follows the challenge's own example: Curiosity's 2025 boxwork study on Mount Sharp |
+| Identify a **science objective** and a location | The crew **selects** one of five objectives per site (plus a general survey); the choice changes the planner's scoring and candidate ranking, and every stop card says why it serves the objective — see [Mission objectives](#mission-objectives). The Gale site follows the challenge's own example: Curiosity's 2025 boxwork study on Mount Sharp |
 | **Astronaut safety first**; space weather, radiation | A **dose-rate comparison** — Earth, ISS, Moon, Mars, all measured — so the crew sees why Mars is different; a **Mars-conservative EVA limit set**; walk-back margin and point of no return; per-route **GCR dose** vs the 600 mSv NASA career limit; **DONKI space-weather advisory** (solar particle event within ±2 days → postpone); **daylight** (home before sunset, or NO-GO); terrain shadow, expected air temperature. See [Safety first](#safety-first) |
 | Spacesuits and **carried equipment** affect mobility | **Mission setup**: Mars suit (104 kg) or lunar xEMU (170 kg) plus equipment; the carried weight on Mars must stay under NASA's 45 kg Earth-equivalent limit, or the plan is NO-GO. **Mars conservative** limits slow the walk by the measured suited cost at Mars gravity |
 | A **route map** that **avoids obstacles such as large rocks** | A* on walking time; slopes above 20° and **rock outcrops / boulders** found in the 1 m HiRISE DTM are walls |
@@ -160,25 +170,78 @@ NASA's published EVA limits were written for the Moon. NASA's own suited walking
 
 On Jezero's longer loop the Mars-conservative set cuts the safety margin by almost two hours: the same plan is still GO, but with far less room for a late start or a long stop.
 
-### What makes a plan GO
+### GO, CONDITIONAL, NO-GO or INSUFFICIENT DATA
+
+Every route card shows one of four statuses and explains it constraint by constraint (`web/src/utils/missionStatus.js`). **Missing information never counts as a pass.**
+
+| Status | When |
+|---|---|
+| **NO-GO** | a hard constraint fails |
+| **INSUFFICIENT DATA** | no hard constraint fails, but one could not be checked (e.g. no EVA start time → daylight unknown; no rock-relief layer → boulders unknown) |
+| **CONDITIONAL** | every hard constraint passes, but an environmental **warning** stands: space weather unknown (future date, offline, failed lookup), a solar particle event within ±2 days, or — with the lunar limits — a walk-back margin under the Apollo 17 30-minute reserve |
+| **GO** | every hard constraint passes and no warning stands |
+
+**Hard constraints** (the planner's own checks):
 
 | Check | Rule |
 |---|---|
-| Walk-back margin | *budget − (time so far + fastest walk home)* ≥ 0 at every point; the first point below 0 is the **point of no return** |
-| Slope | no cell steeper than the slope limit; cells with more than 0.5 m of rock relief are walls |
+| Walk-back margin | *budget − (time so far + fastest walk home)* ≥ 0 at every point; the first point below 0 is the **point of no return**; no path home is a fail |
+| Slope | no cell steeper than the slope limit |
+| Rock obstacles | no cell with more than 0.5 m of rock relief (the 1 m DTM); not checkable without a rock layer |
 | Radius | never farther from the habitat than the radius limit |
 | Rover reach (if used) | never more than a 30-minute walk from the rover |
 | Carry weight | suit + equipment ≤ 45 kg Earth-equivalent on Mars |
 | Daylight | start after sunrise and be home before sunset — a design choice: every Apollo surface EVA was flown in sunlight |
-| Advisories (shown, not blocking) | terrain shadow, air temperature, GCR dose, solar particle events ±2 days |
+
+**Context that never changes the status:** terrain shadow, air temperature, GCR dose, transferred radiation, hazard-map advisories (steep, rough, depressions, rock buffer zone, no ground truth). The cuff card and EVA playback still use the hard-constraint result.
+
+## Mission objectives
+
+The crew chooses an objective before the science planner runs (`web/src/config/objectives.js`). The objective is not decorative: it sets the points each distinct piece of evidence earns (*primary* 5, *supporting* 1–3, everything else 0 — design choices, not measured science values), ranks the candidates that carry its evidence first (so a relevant stop farther away is not cut off by nearer irrelevant ones), and switches candidate types on or off (e.g. "ridge **inside** the boxwork layer", ChemCam targets). Every objective states its purpose, relevance, data layers, candidate locations, selection criteria and known uncertainties in the app, and its **data support** is counted from the loaded site: an objective with no supporting data is disabled rather than planned on invented targets.
+
+| Site | Objective | Primary evidence (from the data) | Data support |
+|---|---|---|---|
+| Jezero | Ancient Lake and Delta Investigation | CRISM water-alteration classes present in the site (here: Olivine + smectite) | **Partial** — the delta (nearest remnant ~2.3 km W of the landing site) is outside the 2 km site; no delta / lake unit occurs in the grid |
+| Jezero | Mineralogical Diversity Exploration | every CRISM class in the site | supported |
+| Jezero | Bedrock and Geological Contact Analysis | bedrock units and their contacts (Stack et al. 2020) | supported |
+| Jezero | Olivine and Pyroxene Investigation | CRISM Olivine, High-/Low-Ca pyroxene | supported |
+| Jezero | Olivine-Smectite Alteration Analysis | CRISM Olivine + smectite (fresh Olivine as the reference) | supported |
+| Gale | Boxwork Ridge and Hollow Investigation | derived ridge / hollow cells **inside** the boxwork-bearing layer | supported (derived proxy) |
+| Gale | Geological Contact Exploration | contacts between the derived stratigraphic levels | supported (derived proxy) |
+| Gale | Chemical Anomaly Investigation | ChemCam standouts (> 2 × RMSEP from the level mean) | supported |
+| Gale | Water-Related Alteration Evidence | ridges in the boxwork layer + ChemCam "CaO high" (consistent with Ca-sulfate veins — not proof: no S in the table) | **Partial** — no CRISM / hydration layer at Gale |
+| Gale | ChemCam Target Re-investigation | distinct ChemCam targets to hand-sample | supported |
+| both | General site survey | the original unit-diversity score — reproduces the validated plans above exactly | — |
+
+Each planned stop gets a **stop card**: name, coordinates, objective, *why selected* (the evidence this stop is the first of the tour to sample, with its points), what to investigate, supporting data layers with their kind, evidence values at the stop (unit, CRISM class and pixel confidence, ChemCam oxide offset and accuracy, thermal inertia, nearest ground view), visit duration, terrain risk (rule: *elevated* if steep / rough / depression / rock buffer at the cell), **data confidence** (rule: the weakest data kind behind the primary evidence — measured in situ > orbital > derived; no score) and remaining uncertainty. A **mission summary** (objective, site, stops, distance, duration, return margin, maximum slope, major hazards, radiation, status) copies these values from the planner without recomputing them.
+
+## Hazard map
+
+**5 · Hazard assessment** draws, per 4 m cell, what can stop a walking crew (`web/src/utils/hazardMap.js`); it can be draped on the 3D terrain and compared with any other layer. Only real inputs are used — the DTM, the 1 m rock-relief layer, the rover's own positions and the planner's walking-time map — and every threshold is labelled with its basis:
+
+| Flag | Rule | Basis |
+|---|---|---|
+| Too steep — **wall** | slope > 20° | NASA xEVA ConOps (lunar value) |
+| Rock / boulder — **wall** | rock relief > 0.5 m | design |
+| Rock buffer zone | within the keep-out distance of a rock wall (shown at ≥ 4 m; **enforced** as walls only if *Rock keep-out* is set to 4 or 8 m — default off so the validated plans are unchanged) | design: one cell covers the ≤ 1 m image–DTM alignment and the cell size |
+| Closed depression | ≥ 0.5 m deep after priority-flood filling (Barnes et al. 2014) | design (same height as the rock limit) |
+| Steep / rough ground | slope > 75 % of the limit / relief > 50 % of the rock limit | same display thresholds as the route card |
+| No ground truth | no rover position within 100 m — only orbital data describe the cell | design |
+| Beyond rover reach | rover safe haven on and > 30 min walk from it | Ogilvie et al. (2026) |
+
+**Limit:** a 1 m DTM resolves rocks of a few metres. Rocks under ~1–2 m, loose sand, soft ground and small pits are **not** detected — a cell without a flag is not proof of safe ground. With a 4 m buffer the Gale walls grow from 28 % to 36 % of the site and the survey plan stays feasible; at Jezero almost no cell is a rock wall, so the buffer changes nothing.
 
 ## How a Marswalk is planned
 
-1. **Science stops.** Candidates are the nearest interior point of every geologic unit pair, every bedrock contact and every CRISM mineral within reach. Where rover chemistry exists (Gale), up to two more: the nearest rock for each kind of chemical standout — an oxide more than 2× ChemCam's accuracy away from its layer's mean (e.g. *MgO low*, *CaO high*) — so the crew re-samples what Curiosity flagged. Pairwise walking times come from Dijkstra; an exact subset DP (Held–Karp) picks the set and order of stops that samples the most distinct units and minerals while walking + time at stops fits the EVA budget (and the rover's 30-minute reach, if used).
+1. **Science stops.** Candidates are the nearest interior point of every geologic unit pair, every bedrock contact and every CRISM mineral within reach. Where rover chemistry exists (Gale), the nearest rock for each kind of chemical standout — an oxide more than 2× ChemCam's accuracy away from its layer's mean (e.g. *MgO low*, *CaO high*) — and, for the re-visit objective, individual ChemCam targets. The **mission objective** ranks the candidates that carry its evidence first and sets the points of each distinct piece of evidence. Pairwise walking times come from Dijkstra; an exact subset DP (Held–Karp, unchanged) picks the set and order of stops with the most points while walking + time at stops fits the EVA budget (and the rover's 30-minute reach, if used).
 2. **Routes.** A* on walking time: Tobler's slope–speed shape scaled to the level pace of the active limit set; cells steeper than 20° or with more than 0.5 m of rock relief are walls. Four route preferences (SAFE, ECO, FAST, AUTO); times always use the same physical model.
 3. **Walk-back margin.** At every point: *margin = budget − (time so far + fastest walk home)*. The first point with a negative margin is the **point of no return**.
-4. **GO / NO-GO** as in the table above.
-5. **Conditions.** For the moment the crew actually walks each point: sun elevation, terrain shadow, darkness, home before sunset or not, expected air temperature, radiation dose and space-weather events.
+4. **Status** — GO / CONDITIONAL / NO-GO / INSUFFICIENT DATA as in the tables above.
+5. **Conditions.** For the moment the crew actually walks each point: sun elevation, terrain shadow, darkness, home before sunset or not, expected air temperature, radiation dose and space-weather events, plus the hazard-map flags along the route.
+
+### Radiation and space weather — kept apart
+
+The sun & radiation panel shows two separate things. **Measured radiation:** Curiosity RAD's 0.64 ± 0.12 mSv/day, with where and when it was measured; at Jezero it is labelled **transferred reference data**, at Gale it is local but measured on the crater floor ~0.9 km below the boxwork site. **Space-weather events:** what NASA's DONKI catalogue lists within ±2 days of the EVA date — SEPs and flares detected near Earth, CME arrivals at Mars from the ENLIL model — with the query window and whether it came from a live lookup, a bundled archive, a failed lookup or a future date. DONKI is a catalogue, not a forecast: a future date shows **UNKNOWN**, and unknown or failed lookups are never treated as zero risk (they make the plan CONDITIONAL).
 
 ## At the stops: ground view and rock chemistry
 
@@ -256,7 +319,7 @@ Every number on the card is the planner's own: the same timeline the GO / NO-GO 
 
 ## Verified, not just drawn
 
-`node --test web/tests/*.test.mjs` (64 tests) and `python -m unittest discover pipeline/tests`, run on every push before the demo is deployed:
+`node --test web/tests/*.test.mjs` (107 tests) and `python -m unittest discover pipeline/tests`, run on every push before the demo is deployed. Jezero (`sites.jezero.test.mjs`), Gale (`sites.gale.test.mjs`, real site data) and the Moon simulator (`moon.test.mjs`) are tested separately:
 
 | Area | What is checked |
 |---|---|
@@ -269,18 +332,24 @@ Every number on the card is the planner's own: the same timeline the GO / NO-GO 
 | Rover track | waypoints come out in drive order and split where the rover leaves the site; every region label lies inside its own unit |
 | Share link | site, start, date, mission setup and route survive the link; bad links are ignored |
 | Safety numbers | GCR dose scaling, the SEP advisory window, the suit carry limit (Mars suit passes, xEMU fails), the rover drive estimate, the dose comparison, and both EVA limit sets (values, sources, walking-time scaling) |
+| Objectives | all ten defined with every field; the survey reproduces the original planner and the README plans exactly; each objective reaches its primary evidence on the real Jezero and Gale data; objectives give different stop sets; relevant candidates rank first; unsupported objectives are refused; boxwork stops lie inside the boxwork layer; the anomaly objective finds more ChemCam standouts than the survey |
+| Mission status | a failed check → NO-GO even with other data missing; no start time or no rock layer → INSUFFICIENT DATA; unknown / failed / future space weather → CONDITIONAL, never GO; SEP → CONDITIONAL; margin under the 30-min reserve (lunar set) → CONDITIONAL |
+| Provenance | Jezero RAD is *transferred*, CRISM / THEMIS *orbital*, MEDA *measured*, SuperCam / PIXL *unavailable*; Gale ChemCam / REMS / RAD *measured*, geology *derived, not official*, CRISM / THEMIS *unavailable*; every record has every field |
+| Hazard map | priority-flood depression depth on a hand-made bowl; buffer disk; every threshold; missing layers reported, never assumed safe; ground-truth radius; rover reach; route shares; rock buffer re-keys the planner's walls and caches |
+| Moon simulator | `?site=moon` stays procedural; all four routes plan around the craters with the original risk / cost stats; no objectives, no science planner, provenance *simulated* |
 
 ## Honest limits
 
 - **EVA limits.** The lunar ConOps values are optimistic for Mars; the Mars-conservative set is derived, not official. Its speed assumes metabolic cost grows in proportion to speed, and the test suit (120 kg MKIII) is heavier than the 104 kg Mars-suit target, so the 1.65 factor may overstate the cost for a lighter suit. The slope limit is lunar in both sets.
 - **Dose comparison.** All four rates are measured, but in different parts of the solar cycle: the Moon value is from 2019 (solar minimum, cosmic rays at their strongest), the Mars value from 2012–13 (near solar maximum). Part of the Moon–Mars gap is that timing. The Earth value is the total natural background, not only cosmic rays.
 - **Radiation at Jezero.** RAD measured at Gale, about 1.8 km lower than Jezero; with less atmosphere above it, the real dose at Jezero is likely a little higher.
-- **Design choices.** How slope changes suited walking speed is an assumption (Tobler shape). Time per stop, science-score weights, the 0.5 m rock-relief limit, the ±2-day SEP window and the 10 km/h rover speed are design choices, labelled as such in the app.
+- **Design choices.** How slope changes suited walking speed is an assumption (Tobler shape). Time per stop, science-score weights and objective points, the 0.5 m rock-relief limit, the hazard-map thresholds (75 % steep, 50 % rough, 0.5 m depressions, 100 m ground truth, the rock buffer), the ±2-day SEP window and the 10 km/h rover speed are design choices, labelled as such in the app.
+- **Objectives.** The objectives can only use the evidence the site holds. Jezero's lake / delta objective cannot reach the delta (outside the site) and targets water-altered rock instead; Gale's water-evidence objective is indirect (landform + major-oxide chemistry, no mineral or hydration layer). Ridge / hollow stops at Gale are derived local highs and lows, not verified boxwork ridges. Stop-card confidence and terrain-risk labels follow written rules; they are not probabilities.
 - **Resolution.** A 1 m DTM shows rocks of a few metres, not smaller ones. Jezero's landing area was chosen for being smooth, so there only a handful of cells exceed the 0.5 m rock-relief limit. CRISM mineral names are the closest match of each spectral class. Thermal-inertia classes are guidance.
 - **Time.** Temperatures are a one-Mars-year climatology, not a forecast. Space weather is queried live from api.nasa.gov for the EVA date (public demo key, rate-limited); offline, or when the lookup fails, the advisory says there is no data. `fetch-donki.yml` can bundle a DONKI archive since 2012 so past dates also work offline — it needs a free NASA API key as the repository secret `NASA_API_KEY`, because GitHub's shared runners hit the demo-key limit. DONKI has no forecast: for a future EVA the advisory says there is no data.
 - **Gale geology.** There is no published GIS geologic map of this part of Mount Sharp. The units are derived and say so: *stratigraphic level* is the elevation band Curiosity crossed during the boxwork campaign (−3655 to −3595 m; the rover was always below it before sol 4541 and always above it after leaving the boxwork), on the assumption that the layers are close to horizontal — the lateral edges of the boxwork terrain are not modelled. *Terrain class* (ridge, hollow, smooth, steep) is relief against a 15 m background in the 2016 merged DEM, which does not resolve the individual boxwork ridges (a few metres wide). About a quarter of the cells are steeper than 20°, and DEM noise raises the rock-relief layer, so routes are more constrained than at Jezero. No THEMIS or CRISM layer yet.
 - **Gale air temperature.** One Mars year (sols 4175–4843) of REMS's own estimate of ambient air temperature, kept only where REMS flags the reading reliable. On a few sols the sensor drops to −115…−120 °C around sunset, which no flag catches; a robust screen against the other sols of the same season and time removes them (76 of 75,703 five-minute means). Curiosity drove a few kilometres that year, so this is the climate of lower Mount Sharp rather than of one spot. Gale nights are on average 8 °C warmer than Jezero's (from 3 °C colder to 18 °C warmer by season): Gale is 1.8 km lower and closer to the equator.
-- **Chemistry.** ChemCam analyses a spot a few millimetres wide, at 2–3 m from the mast; its accuracy (RMSEP) is a few wt% for the major oxides, shown on every bar. Target positions ignore the mast offset (about a metre). Jezero has no chemistry layer: SuperCam and PIXL compositions are not yet published as a table in the PDS.
+- **Chemistry.** ChemCam analyses a spot a few millimetres wide, at 2–3 m from the mast; its accuracy (RMSEP) is a few wt% for the major oxides, shown on every bar. Target positions ignore the mast offset (about a metre). Jezero has no chemistry layer: SuperCam (`supercam_libs_moc.csv`) and PIXL (`data_oxides_pmc`) oxide tables **are** in the PDS, but without target coordinates; placing them needs a rover-pose + pointing reconstruction that is not built yet. Gale has no CRISM or THEMIS layer; both were investigated and are shown as unavailable — see [docs/DATA_PROVENANCE.md](docs/DATA_PROVENANCE.md#missing-data-investigation-phase-4).
 - **Images.** The orbital image is shown at 0.5 m/px (the mosaics are 25 cm) to keep the download near 4 MB per site; up close it is soft, so the DEM mode is better for close-ups. It is a single moment in time, with the lighting of that HiRISE pass. Ground-view directions are mast azimuth + rover heading, accurate to a few degrees; only the metadata is stored and the images load from mars.nasa.gov, so ground views need an internet connection (the viewer says so when a frame cannot load).
 
 ## Data & credits
@@ -321,18 +390,25 @@ Every number on the card is the planner's own: the same timeline the GO / NO-GO 
 
 ## Use of AI
 
-Developed with AI assistance (Anthropic Claude) for code, data pipelines, tests and documentation, under the team's direction and review. All data come from the sources above. The astronauts, dust devil and other 3D objects are original procedural models written in code; no AI-generated images are used.
+Developed with AI assistance (Anthropic Claude) for code, data pipelines, tests and documentation, under the team's direction and review. The mission objectives, data-provenance records, hazard map, GO / CONDITIONAL / NO-GO / INSUFFICIENT DATA evaluation, stop cards, mission summary and their tests and documentation were also written with Claude's assistance and checked against the data and sources cited here. No data were generated by AI: every layer comes from the NASA / USGS / published sources above, and every value the AI could not verify is marked as a design choice, an assumption or unavailable. The astronauts, dust devil and other 3D objects are original procedural models written in code; no AI-generated images are used.
+
+## Design inspirations
+
+NASA Mars Trek, Moon Trek, Solar System Treks, Worldview, Eyes on the Solar System, Eyes on Exoplanets, the Apollo 15–17 cuff checklists and NASA's rover-route maps — what each one is, which design decision it led to, and what it is not (e.g. Worldview has no Mars data; Eyes on Exoplanets is not a surface map): [docs/NASA_INSPIRATION.md](docs/NASA_INSPIRATION.md). The technical audit behind this version: [docs/AUDIT.md](docs/AUDIT.md).
 
 ## Repository map
 
 ```
 web/     the web app (React + Three.js / react-three-fiber, Vite)
   src/utils/              walkModel · pathfinder (A*) · walkback (Dijkstra) · science (stop optimiser)
+                          hazardMap · siteHazards · missionStatus · stopRationale · missionSummary
                           radiation · marsTime (Mars24) · shadows · climate · chemistry · cuffCard · elevationProfile
                           evaTimeline + evaPlayback · orthoImage
   src/config/             marswalkProfile (EVA limits, both sets) · mission (suit, equipment, rover)
+                          objectives (mission objectives) · provenance (data-layer records)
   src/components/         MoonScene (3D) · MarsCrew · EvaHud · RightPanel · SiteSwitcher
                           PovViewer (ground view) · ChemistryCard · CuffCard · ElevationProfile
+                          MissionPanels (workflow, objective, provenance, hazards, stop cards, safety, summary)
   public/sites/jezero/    grid.bin · ortho (HiRISE) · geology · climate (MEDA) · layers (THEMIS, CRISM, rocks) · pov · track
   public/sites/gale/      grid.bin · ortho (HiRISE) · geology (derived) · climate (REMS) · layers (rocks) · chemistry (ChemCam) · pov · track
   tests/                  node --test suites

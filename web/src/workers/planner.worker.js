@@ -37,6 +37,7 @@ self.onmessage = async (e) => {
       return;
     }
     if (CFG && e.data.profile) CFG.setEvaProfile(e.data.profile);
+    if (CFG && e.data.bufferM != null) CFG.setObstacleBufferM(e.data.bufferM);
     if (type === 'plan') {
       if (!P) throw new Error('planner worker not initialised');
       const t0 = performance.now();
@@ -45,7 +46,7 @@ self.onmessage = async (e) => {
       const hmaps = P.peekHomeMaps();
       // Ev haritalarının kopyası (worker kendi önbelleğini korur); ana iş parçacığına aktarılır
       const homeMaps = hmaps && {
-        homeIdx: hmaps.homeIdx, profile: hmaps.profile,
+        homeIdx: hmaps.homeIdx, profile: hmaps.profile, bufferM: hmaps.bufferM ?? 0,
         fromHome: hmaps.fromHome.slice(),
         toHome: hmaps.toHome.slice(),
       };

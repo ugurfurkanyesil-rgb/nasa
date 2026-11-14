@@ -6,6 +6,11 @@
 import { GRID_RES, TERRAIN_SIZE, buildHeightMap, buildSlopeMap, buildCraterMask, CRATERS, SITE } from '../three/terrainGenerator.js';
 import { buildIlluminationMap, hazardScore, getWallMap, peekHomeMaps } from './pathfinder.js';
 import { param } from '../config/marswalkProfile.js';
+import { getSiteHazards } from './siteHazards.js';
+import { HAZARD_LEGEND, HAZ } from './hazardMap.js';
+
+/** Hazard map layer name (DEM): slope / rock walls, rock buffer, depressions, steep / rough, ground truth. */
+export const HAZARD_LAYER = 'Hazard Map';
 
 // Thermal color scale: blue→cyan→green→yellow→red
 function thermalColor(t) {
@@ -69,7 +74,8 @@ const DATA_LAYER = {
 /** Data-layer heatmaps available for this site (only those whose data loaded). */
 export function dataLayerOptions() {
   const L = SITE.layers;
-  return L ? Object.keys(DATA_LAYER).filter(k => L[DATA_LAYER[k]]) : [];
+  const opts = L ? Object.keys(DATA_LAYER).filter(k => L[DATA_LAYER[k]]) : [];
+  return SITE.mode === 'dem' ? [HAZARD_LAYER, ...opts] : opts;
 }
 // Fixed display ranges so the colours mean the same thing on every site.
 const DATA_RANGE = { thermal: [150, 450], rock: [0, 0.6] };
@@ -81,6 +87,15 @@ const DATA_RANGE = { thermal: [150, 450], rock: [0, 0.6] };
  * null if `type` is not a data layer.
  */
 export function dataLayerLegend(type) {
+  if (type === HAZARD_LAYER) {
+    const hz = getSiteHazards();
+    if (!hz) return null;
+    const entries = HAZARD_LEGEND.map(e => ({ name: e.label, color: `rgb(${e.color.join(',')})`, pct: 100 * (hz.summary[e.flag] || 0) }))
+      .filter(e => e.pct > 0);
+    return { kind: 'classes', entries, source: 'Derived: DTM slope, 1 m rock relief, rover positions (this project)',
+      note: 'Each cell shows its most severe flag. A 1 m DTM resolves rocks of a few metres only: smaller rocks, loose sand and soft ground are NOT detected — no colour is not proof of safe ground.'
+        + (hz.missing.length ? ` Missing: ${hz.missing.join('; ')}.` : '') };
+  }
   const key = DATA_LAYER[type], L = SITE.layers?.[key];
   if (!L) return null;
   const src = L.source ? `${L.source.creators?.split(',')[0] ?? ''} ${L.source.year ?? ''} · ${L.source.mission ?? ''} · ${L.source.license ?? ''}`.trim() : '';
@@ -128,6 +143,22 @@ export function drawHeatmap(canvas, type, experienceMap, sunAngle = 45, sunEleva
   // Build the parameter map
   let paramMap;
   let maxVal = 1;
+
+  if (type === HAZARD_LAYER) {
+    const hz = getSiteHazards();
+    for (let py = 0; py < H; py++) for (let px2 = 0; px2 < W; px2++) {
+      const k = Math.floor((py / H) * GRID_RES) * GRID_RES + Math.floor((px2 / W) * GRID_RES);
+      const f = hz ? hz.flags[k] : 0;
+      const e = HAZARD_LEGEND.find(x => f & x.flag);    // most severe first
+      const i = (py * W + px2) * 4;
+      const c = e ? e.color : [30, 60, 30];
+      // "orbital data only" is context, not danger: drawn faint so real hazards stay readable
+      const a = !e ? 50 : e.flag === HAZ.NO_GROUND_TRUTH ? 70 : 225;
+      px[i] = c[0]; px[i + 1] = c[1]; px[i + 2] = c[2]; px[i + 3] = a;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return;
+  }
 
   const dataKey = DATA_LAYER[type];
   if (dataKey) {

@@ -8,7 +8,7 @@
 
 import { IS_DEM, SITE } from '../three/terrainGenerator.js';
 import { planAllRoutes, setHomeMaps, planScience as planScienceSync } from './pathfinder.js';
-import { getEvaProfile } from '../config/marswalkProfile.js';
+import { getEvaProfile, getObstacleBufferM } from '../config/marswalkProfile.js';
 
 let worker = null;
 let readyPromise = null;
@@ -29,7 +29,7 @@ function call(type, payload, transfer) {
   return new Promise((resolve, reject) => {
     const id = ++seq;
     pending.set(id, { resolve, reject });
-    worker.postMessage({ id, type, profile: getEvaProfile(), ...payload }, transfer || []);
+    worker.postMessage({ id, type, profile: getEvaProfile(), bufferM: getObstacleBufferM(), ...payload }, transfer || []);
   });
 }
 
