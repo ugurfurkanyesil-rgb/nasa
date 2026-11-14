@@ -40,6 +40,7 @@ const pass = (b) => (b === true ? 'pass' : b === false ? 'fail' : 'unknown');
  *   radiationCategory: 'direct' | 'transferred'           provenance of the dose rate
  *   rockLayer: boolean                                    rock-relief layer loaded
  *   routeHazards: [{ flag, label, hard, share }]           hazardMap.routeHazards
+ *   dust: dustAssessment result (warnings → cautions, never status-changing)
  * }
  */
 export function evaluateMission(s, ctx = {}) {
@@ -64,8 +65,11 @@ export function evaluateMission(s, ctx = {}) {
       : 'The route touches a rock-relief wall cell (endpoint inside an obstacle).');
   add('radial', `Within ${L.radialKm ?? 2} km of the start`, pass(c.radial), `max ${(s.maxRadialM / 1000).toFixed(2)} km`,
     c.radial ? 'Never farther from the habitat than the radius limit.' : 'Goes beyond the radius limit.');
-  add('carry', 'Carried weight within the limit', pass(c.carry), s.carry ? `${s.carry.earthEqKg.toFixed(1)} / ${s.carry.limitKg} kg Earth-eq.` : '—',
-    c.carry ? 'Suit + equipment weight on Mars is within what a crew member can carry (Ogilvie et al. 2026).' : 'Suit + equipment is too heavy to walk with.');
+  add('carry', 'Carried weight within the limit', pass(c.carry),
+    Number.isFinite(s.carry?.earthEqKg) ? `${s.carry.earthEqKg.toFixed(1)} / ${s.carry.limitKg} kg Earth-eq.` : 'invalid payload input',
+    c.carry === true ? 'Suit + equipment weight on Mars is within what a crew member can carry (Ogilvie et al. 2026).'
+      : c.carry === false ? 'Suit + equipment is too heavy to walk with (Payload & Mass).'
+      : 'A payload value is missing or invalid, so the carried weight could not be checked (Payload & Mass).');
   if ('rover' in c) {
     add('rover', 'Never more than a 30-min walk from the rover', pass(c.rover), s.rover ? `farthest ${fmtHM(s.rover.maxReturnS)}` : '—',
       c.rover ? 'The pressurized rover stays within walk-back reach.' : 'The crew would be out of the rover\'s 30-minute reach.');
@@ -104,6 +108,8 @@ export function evaluateMission(s, ctx = {}) {
   }
   if (s.radiation) info.push({ id: 'dose', level: 'info', label: `GCR dose ${s.radiation.doseMSv.toFixed(2)} mSv`, text: `${(s.radiation.careerFrac * 100).toFixed(3)} % of the 600 mSv career limit (galactic cosmic rays only).` });
   if (s.light?.shadowFrac > 0.05) info.push({ id: 'shadow', level: 'caution', label: `Terrain shadow ${(s.light.shadowFrac * 100).toFixed(0)} % of the walk`, text: 'Walking in shadow: colder, harder to see the ground.' });
+  // Dust (utils/dustAssessment.js): CAUTIONS only — dust never turns a plan NO-GO or CONDITIONAL by itself
+  for (const w of ctx.dust?.warnings || []) info.push({ id: w.id, level: 'caution', label: 'Dust', text: w.text });
   for (const h of ctx.routeHazards || []) {
     if (h.hard || h.share < 0.005) continue;
     info.push({ id: 'haz' + h.flag, level: 'caution', label: `${h.label}: ${(h.share * 100).toFixed(0)} % of the route`, text: 'From the hazard map (advisory, not a wall).' });

@@ -8,6 +8,8 @@
  * that suit pressure offsets, i.e. ~45 kg Earth-equivalent.
  */
 
+import { assessPayload } from '../utils/payloadAssessment.js';
+
 export const MARS_G = 3.711;      // m/s²
 export const EARTH_G = 9.80665;   // m/s²
 
@@ -31,20 +33,20 @@ export const ROVER = {
   driveSpeedKmh: { value: 10, status: 'design', note: 'Average pressurized-rover driving speed for the drive-time estimate. Planning choice.' },
 };
 
-/** Default mission settings (UI state). */
-export const DEFAULT_MISSION = { suit: 'mars', equipmentKg: 10, rover: false, limits: 'lunar', obstacleBufferM: 0 };
+/** Default mission settings (UI state). payload: extra equipment categories (kg), dust: protection
+ *  configuration (config/dust.js; 'unknown' until the crew states it). */
+export const DEFAULT_MISSION = { suit: 'mars', equipmentKg: 10, rover: false, limits: 'lunar', obstacleBufferM: 0,
+  payload: { instruments: 0, comms: 0, sampling: 0, emergency: 0 } };
 
 /**
- * Carried-weight check: suit + equipment weight on Mars, as Earth-equivalent kg,
- * against lift limit + pressure offset.
+ * Carried-weight check: suit + all declared equipment, as Earth-equivalent kg on Mars, against
+ * lift limit + pressure offset. One calculation, in utils/payloadAssessment.js (Payload & Mass
+ * Assessment). ok: true / false, or null when an input is invalid (never silently zero).
  */
 export function carryCheck(m) {
-  const suit = SUITS[m?.suit] || SUITS.mars;
-  const massKg = suit.massKg + Math.max(0, m?.equipmentKg || 0);
-  const earthEqKg = massKg * MARS_G / EARTH_G;
-  const limitKg = CARRY.liftLimitKg.value + CARRY.pressureOffsetKg.value;
-  return { suit, massKg, earthEqKg, limitKg, ok: earthEqKg <= limitKg,
-    maxEquipmentKg: Math.max(0, limitKg * EARTH_G / MARS_G - suit.massKg) };
+  const a = assessPayload(m);
+  return { suit: a.suit || SUITS.mars, massKg: a.massKg, earthEqKg: a.earthEqKg, limitKg: a.limitKg, ok: a.ok,
+    maxEquipmentKg: a.maxEquipmentKg, payload: a };
 }
 
 /** Straight-line drive estimate from the habitat (site centre) to the rover parking point. */

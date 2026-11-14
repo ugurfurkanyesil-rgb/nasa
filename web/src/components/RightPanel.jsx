@@ -37,7 +37,11 @@ import { stopCard } from '../utils/stopRationale';
 import { missionSummary } from '../utils/missionSummary';
 import { getSiteHazards, routeHazardsFor } from '../utils/siteHazards';
 import { HAZARD_LAYER } from '../utils/heatmaps';
-import { getEvaProfile } from '../config/marswalkProfile';
+import { getEvaProfile, EVA_PROFILES as EVA_PROFILE_SETS } from '../config/marswalkProfile';
+import { PayloadPanel, DustPanel, MobilityPanel } from './AssessmentPanels';
+import { assessDust } from '../utils/dustAssessment';
+import { assessMobility } from '../utils/mobilityAssessment';
+import { routeSurface } from '../utils/siteHazards';
 
 const HALF = TERRAIN_SIZE / 2;
 const PW   = PANEL_W;   // panel width (src/ui/layout.js)
@@ -460,14 +464,16 @@ function MissionPanel({ mission, setMission, start, disabled }) {
         ))}
       </div>
       <div style={row}>
-        <span style={{ width: 54 }}>Equipment</span>
+        <span style={{ width: 54 }} title="General / additional equipment. Other categories: Payload & Mass.">Equipment</span>
         <input type="range" min={0} max={40} step={1} value={mission.equipmentKg}
           onChange={e => set('equipmentKg', Number(e.target.value))} style={{ flex: 1 }} />
         <b style={{ color: '#e8e0c8', width: 40, textAlign: 'right' }}>{mission.equipmentKg} kg</b>
       </div>
-      <div style={{ fontSize: fs(7), color: c.ok ? '#88dd99' : '#ff6655', lineHeight: 1.5 }}>
-        Carried weight on Mars: {c.earthEqKg.toFixed(1)} kg Earth-equivalent / {c.limitKg} kg limit
-        {c.ok ? ` · up to ${c.maxEquipmentKg.toFixed(0)} kg of equipment` : ' · NO-GO: too heavy to walk with'}
+      <div style={{ fontSize: fs(7), color: c.ok ? '#88dd99' : c.ok === false ? '#ff6655' : '#ffb347', lineHeight: 1.5 }}>
+        {c.ok == null
+          ? <>Carried weight: NOT CHECKED — a payload value is invalid (see Payload &amp; Mass).</>
+          : <>Carried weight on Mars (suit + all equipment): {c.earthEqKg.toFixed(1)} kg Earth-equivalent / {c.limitKg} kg limit
+            {c.ok ? ` · up to ${c.maxEquipmentKg.toFixed(0)} kg of equipment in total` : ' · NO-GO: too heavy to walk with'}</>}
       </div>
       <div style={row}>
         <span style={{ width: 54 }}>EVA limits</span>
@@ -1188,10 +1194,24 @@ export default function RightPanel({
         profile: getEvaProfile(), spaceWeather: sw, swState,
         radiationCategory: radRecord?.categories?.[0], rockLayer: !!SITE.layers?.rock,
         routeHazards: routeHazardsFor(r.path),
+        dust: assessDust({ dust: mission.dust, rover: mission.rover, stats: r.stats, surface: routeSurface(r.path) }),
       });
     }
     return out;
-  }, [routes, sw, swState, radRecord, hazards]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [routes, sw, swState, radRecord, hazards, mission.dust, mission.rover]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ---- EVA readiness: three independent assessments (payload, dust, terrain & mobility) ----
+  const payloadA = carryCheck(mission).payload;
+  const activeR = routes?.[activeRoute];
+  const activeDem = IS_DEM && activeR?.stats && activeR.stats.walkTimeS !== undefined;
+  const dustA = useMemo(() => assessDust({ dust: mission.dust, rover: mission.rover,
+    stats: activeDem ? activeR.stats : null, surface: activeDem ? routeSurface(activeR.path) : null }),
+  [mission.dust, mission.rover, activeR, activeDem]);
+  const mobilityA = useMemo(() => (activeDem ? assessMobility(activeR.stats, {
+    evaluation: evaluations[activeRoute], profileLabel: EVA_PROFILE_SETS[getEvaProfile()]?.label,
+    levelSpeedKmh: param('levelWalkSpeedKmh'), slopeLimitDeg: param('maxWalkableSlopeDeg'),
+    speedSource: getEvaProfile() === 'mars' ? 'Norcross et al. 2009, suited cost ×1.65' : 'NASA xEVA ConOps (lunar)',
+    routeHazards: routeHazardsFor(activeR.path),
+  }) : assessMobility(null)), [activeR, activeDem, evaluations, activeRoute]); // eslint-disable-line react-hooks/exhaustive-deps
   const stopCards = useMemo(() => {
     if (!IS_DEM || !science?.stops) return [];
     const obj = getObjective(science.objective);
@@ -1378,6 +1398,14 @@ export default function RightPanel({
         {IS_DEM && (
         <Sect label="3 · Crew & equipment (mission setup)" id="crew">
           <MissionPanel mission={mission} setMission={setMission} start={waypoints?.[0]} disabled={isRoving} />
+        </Sect>
+        )}
+
+        {IS_DEM && (
+        <Sect label="3b · EVA readiness — payload, dust, terrain (separate results)" id="readiness">
+          <PayloadPanel mission={mission} setMission={setMission} payload={payloadA} disabled={isRoving} />
+          <DustPanel mission={mission} setMission={setMission} dust={dustA} disabled={isRoving} />
+          <MobilityPanel mobility={mobilityA} />
         </Sect>
         )}
 
@@ -1660,6 +1688,16 @@ export default function RightPanel({
                 provenance: records.map(({ id, name, mission: m, instrument, source, observation, resolution, coverage, dataType, categories, subtype, processing, status, uncertainty, limitations, investigation }) =>
                   ({ id, name, mission: m, instrument, source, observation, resolution, coverage, dataType, categories, subtype, processing, status, uncertainty, limitations, investigation })),
                 hazardSummary: hazards ? Object.fromEntries(Object.entries(hazards.summary)) : null,
+                readiness: {
+                  payload: { status: payloadA.status, items: payloadA.items.map(({ id, label, kg, valid }) => ({ id, label, kg, valid })),
+                    suit: payloadA.suit?.label, suitIncluded: payloadA.components, totalKg: payloadA.massKg, earthEqKg: payloadA.earthEqKg,
+                    limitKg: payloadA.limitKg, remainingKg: payloadA.remainingKg, errors: payloadA.errors },
+                  dust: { result: dustA.result, exposure: dustA.exposure, config: dustA.config, indicators: dustA.indicators, gaps: dustA.gaps,
+                    components: dustA.components.map(({ id, label, applicable, level, note, sources }) => ({ id, label, applicable, level, note, sources: sources?.map(x => `${x.id} (${x.applicability})`) })),
+                    warnings: dustA.warnings.map(w => w.text), quantified: dustA.quantified },
+                  mobility: { result: mobilityA.result, headline: mobilityA.headline, terrain: mobilityA.terrain, returnSafety: mobilityA.returnSafety,
+                    payloadPenalty: mobilityA.payloadPenalty, dustPenalty: mobilityA.dustPenalty },
+                },
               } : null);
               setExported(true);
               showToast?.(IS_DEM ? 'Mission file (JSON) saved to Downloads.' : 'JSON route file saved to Downloads.', 'info');

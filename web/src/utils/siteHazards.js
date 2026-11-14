@@ -51,3 +51,26 @@ export function routeHazardsFor(path) {
   const hz = getSiteHazards();
   return hz ? routeHazards(path, hz.flags, cellIndexAt) : [];
 }
+
+/**
+ * Loose fine material along a route — the only dust-exposure indicator the site data can give.
+ * Jezero: THEMIS class "dust / fine sand" (dataset interpretation table) or an aeolian-bedform
+ * surface unit (Stack et al. 2020). A site with neither layer (Gale) → looseShare null (unknown).
+ */
+export function routeSurface(path) {
+  const ti = SITE.layers?.thermal;
+  const tiLoose = ti?.interpretation?.find(([, , name]) => /dust/i.test(name));
+  const g = SITE.geology;
+  const aeolian = g ? g.surfaceUnits.map((u, k) => (/aeolian/i.test(u || '') ? k : -1)).filter(k => k > 0) : [];
+  if (!path?.length || (!tiLoose && !aeolian.length)) {
+    return { looseShare: null, basis: 'No surface-material layer for this site (no THEMIS class, no aeolian unit) — unknown, not zero.' };
+  }
+  let n = 0;
+  for (const p of path) {
+    const k = cellIndexAt(p[0], p[2]);
+    const v = ti ? ti.values[k] : NaN;
+    if ((tiLoose && Number.isFinite(v) && v >= tiLoose[0] && v < tiLoose[1]) || aeolian.includes(g.surface[k])) n++;
+  }
+  const parts = [tiLoose ? `THEMIS "${tiLoose[2]}" class (< ${tiLoose[1]} TI units)` : null, aeolian.length ? 'aeolian bedform units' : null].filter(Boolean);
+  return { looseShare: n / path.length, basis: `Route points on ${parts.join(' or ')}.` };
+}

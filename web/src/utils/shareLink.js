@@ -44,6 +44,12 @@ export function encodePlan({ waypoints = [], science = false, route, startMs, mi
   if (mission) {
     st.m = { suit: mission.suit, equipmentKg: mission.equipmentKg, rover: !!mission.rover, limits: mission.limits };
     if (mission.obstacleBufferM > 0) st.m.b = mission.obstacleBufferM;
+    const p = mission.payload || {};
+    const pk = ['instruments', 'comms', 'sampling', 'emergency'].map(k => (Number.isFinite(p[k]) && p[k] >= 0 ? p[k] : 0));
+    if (pk.some(v => v > 0)) st.m.p = pk;
+    const d = mission.dust || {};
+    const dk = ['outerLayer', 'joints', 'equipment', 'covers'].map(k => d[k] || 'unknown');
+    if (dk.some(v => v !== 'unknown')) st.m.u = dk;
   }
   if (Number.isFinite(dwellMin)) st.d = dwellMin;
   if (typeof objective === 'string' && /^[a-z0-9-]{1,40}$/.test(objective)) st.o = objective;
@@ -90,6 +96,10 @@ export function decodePlan(search) {
       rover: st.m.rover === true,
       ...(st.m.limits === 'mars' || st.m.limits === 'lunar' ? { limits: st.m.limits } : {}),
       ...([4, 8].includes(st.m.b) ? { obstacleBufferM: st.m.b } : {}),
+      ...(Array.isArray(st.m.p) && st.m.p.length === 4 && st.m.p.every(v => num(v) != null && v >= 0 && v <= 100)
+        ? { payload: { instruments: st.m.p[0], comms: st.m.p[1], sampling: st.m.p[2], emergency: st.m.p[3] } } : {}),
+      ...(Array.isArray(st.m.u) && st.m.u.length === 4 && st.m.u.every(v => typeof v === 'string' && /^[a-z]{1,16}$/.test(v))
+        ? { dust: { outerLayer: st.m.u[0], joints: st.m.u[1], equipment: st.m.u[2], covers: st.m.u[3] } } : {}),
     };
   }
   return out;
