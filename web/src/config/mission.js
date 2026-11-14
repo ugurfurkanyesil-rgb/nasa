@@ -36,7 +36,8 @@ export const ROVER = {
 /** Default mission settings (UI state). payload: extra equipment categories (kg), dust: protection
  *  configuration (config/dust.js; 'unknown' until the crew states it). */
 export const DEFAULT_MISSION = { suit: 'mars', equipmentKg: 10, rover: false, limits: 'lunar', obstacleBufferM: 0,
-  payload: { instruments: 0, comms: 0, sampling: 0, emergency: 0 } };
+  payload: { instruments: 0, comms: 0, sampling: 0, emergency: 0 },
+  lifeSupport: { arch: 'bvad-swingbed', walkLoad: 'baseline' } };   // config/lifeSupport.js
 
 /**
  * Carried-weight check: suit + all declared equipment, as Earth-equivalent kg on Mars, against

@@ -95,3 +95,18 @@ test('three assessments are independent results; terrain rules unchanged', () =>
   assert.equal(assessMobility(null).result, 'NOT CHECKED');
   assert.equal(P.getWallMap().length, N * N);
 });
+
+test('O₂ budget follows the planned route timeline and does not change the route', async () => {
+  const { assessOxygen } = await import('../src/utils/oxygenBudget.js');
+  CFG.setEvaProfile('lunar');
+  const a = plan(base);
+  const b = plan({ ...base, lifeSupport: { arch: 'ices-cryo', walkLoad: 'norcross' } });
+  assert.deepEqual(b.path, a.path);
+  const o = assessOxygen(a.stats, { mission: base, profile: 'lunar' });
+  assert.equal(o.result, 'OK');
+  assert.ok(Math.abs(o.totalKg - 0.15 * a.stats.roundTripS / 3600) < 1e-9);
+  const n = a.stats.elapsedS.length;
+  assert.ok(Math.abs(o.usedKg[n - 1] - 0.15 * a.stats.elapsedS[n - 1] / 3600) < 1e-9);
+  // needed-to-return O₂ never below O₂ already used
+  for (let i = 0; i < n; i++) assert.ok(o.needKg[i] >= o.usedKg[i] - 1e-12);
+});

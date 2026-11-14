@@ -1,12 +1,13 @@
-# EVA readiness: payload, dust, terrain
+# EVA readiness: payload, dust, terrain, life support
 
-Three assessments sit under **3b · EVA readiness** in the panel. Each one reports its own result and its own explanation. They are never merged into a single risk score. All three feed the existing mission status (GO / CONDITIONAL / NO-GO / INSUFFICIENT DATA) through explicit rules.
+Four assessments sit under **3b · EVA readiness** in the panel. Each one reports its own result and its own explanation. They are never merged into a single risk score. All four feed the existing mission status (GO / CONDITIONAL / NO-GO / INSUFFICIENT DATA) through explicit rules.
 
 | Assessment | Module | Result values | Effect on mission status |
 |---|---|---|---|
 | A. Payload & Mass | `web/src/utils/payloadAssessment.js` | WITHIN LIMIT · OVER LIMIT · INVALID INPUT | Over the limit: the carry check **fails** (NO-GO). Invalid input: the carry check is **not checked** (INSUFFICIENT DATA) |
 | B. Dust Exposure & Equipment Reliability | `web/src/config/dust.js`, `web/src/utils/dustAssessment.js` | CAUTION · INSUFFICIENT DATA | **Cautions only.** Dust never makes a plan NO-GO or CONDITIONAL on its own |
 | C. Terrain & Mobility | `web/src/utils/mobilityAssessment.js` | PASS · FAIL · NOT CHECKED | Uses the **same** hard checks the status already uses (slope, rock, walk-back margin, radius, rover reach). No new rule |
+| D. Life support — primary O₂ | `web/src/config/lifeSupport.js`, `web/src/utils/oxygenBudget.js` | WITHIN PLAN · SHORTFALL · NO CAPACITY · NOT CHECKED | Shortfall: a **warning** (CONDITIONAL). Never NO-GO: the capacity is a design-study planning value, not flight hardware |
 
 ## Audit before the change
 
@@ -92,9 +93,32 @@ All values are read from the planner. Nothing is recomputed.
 
 The only validated suit-level speed adjustment is the Mars-conservative set (÷ 1.65). It sits inside the single walking-time model, so outbound and return times scale identically. A test checks that both Dijkstra maps scale by 2.0 / 1.21. The *difficulty* label (easy / moderate / demanding) is a display summary with a written rule, never a constraint.
 
+## D. Life support — primary O₂
+
+O₂ use depends on the PLSS architecture far more than on anything else, so the crew picks one. Each architecture carries its own sourced rate and, where the source gives one, a sourced planning capacity. Latest sources found (November 2026). No BVAD revision newer than REV2 exists.
+
+| Architecture | O₂ rate (per crew member) | Planning capacity | Sources |
+|---|---|---|---|
+| Swing-bed, CO₂ vented to Mars air (**default**) | 0.15 kg/h | 0.6 kg, 4-h sortie | BVAD REV2 (NASA/TP-2015-218570/REV2, 2022) §4.6 |
+| Closed loop (metabolic O₂ + leakage) | 0.076 kg/h | 0.3 kg, 4-h sortie | BVAD REV2 §4.6 |
+| Semi-open, dual cryogenic scrubber (LOX) | 1.089 kg/h (~2.4 lb/h) | 8.6 kg, 8-h Mars nominal EVA | rate: ICES-2026-158 §IV.C; capacity: ICES-2025-090 slide 9 (schematics 1–2) |
+| Open loop, O₂ purge (LOX) | 0.998 kg/h (2.2 lb/h, primary) | **none** — the paper gives no stored-O₂ mass | ICES-2026-158 §II.B |
+
+**Method.** Nothing is re-planned. For every route point the planner already knows the departure time (stops included) and the walk-back margin, so the walk-home time is `budget − elapsed − margin`. The O₂ needed if the crew turns home at that point is `rate × (stop time + walking time + walk home)`. The O₂ margin is the capacity minus that need. The first point with a negative margin is the **O₂ point of no return**. The EVA playback HUD shows the O₂ used so far.
+
+**Optional walking load (assumption, off by default).** Walking at the lunar ConOps speed in Mars gravity costs 1.65× the suited VO₂ (Norcross et al. 2009, Table 5: 27.6 vs 16.7 ml/min/kg). When chosen, the factor scales **walking time only**, never stops. It applies only to metabolic packs (swing-bed, closed loop) and only with the lunar limit set. The Mars-conservative set already slowed the walk to keep the lunar metabolic load.
+
+**Notes in the panel and the safety list.**
+- An EVA longer than 4 h is flagged: BVAD REV2 notes that a standard Mars EVA may be shortened to 4 h (two half-day sorties per day).
+- An EVA longer than the pack's sizing duration is flagged.
+- Secondary (emergency) O₂ is never counted. ICES-2026-158 sizes it for 1 h (4–8-h EVAs).
+
+**What it is not.** It is not a suit tank: no Mars-certified PLSS exists, and the capacities are design-study planning values. The rates are per-architecture averages (BVAD basis 295 W; ICES consumables sized at 350 W average). There is no time-varying metabolic profile and no thermal or environmental dependence (ICES-2026-158 results are for the Mars nominal environment only). CO₂, water and power are not budgeted.
+
 ## Model limitations
 
 - The 45 kg rule simplifies NASA's Eq. 7 and is more conservative for the reference crew. It does not adapt to the crew member's body mass or fitness.
 - No validated model links payload or dust to walking speed on Mars, so none is applied.
 - Dust vulnerability levels are qualitative judgements from mostly lunar evidence. Direct Mars evidence covers material exposure and robotic mechanisms, not a working suit.
 - Loose-material exposure is known only where a surface-material layer exists (Jezero). Dust storms are not modelled.
+- The O₂ budget uses constant per-architecture rates. It has no metabolic profile, no environment dependence and no secondary O₂. The cryogenic-scrubber rate and capacity come from two studies of the same architecture family (they agree within 1.5 %).

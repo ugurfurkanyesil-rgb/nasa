@@ -9,7 +9,7 @@
  *   sci true → re-run the science-stop planner from w[0] (the stops are deterministic)
  *   r  active route (SAFE / ECO / FAST / AUTO)
  *   t  EVA start, ms since 1970 (UTC) — drives sun, temperature, DONKI
- *   m  mission setup { suit, equipmentKg, rover, limits }
+ *   m  mission setup { suit, equipmentKg, rover, limits } (+ b buffer, p payload, u dust, o life support)
  *   d  time per science stop, min
  *   o  mission objective id (config/objectives.js); old links without it re-plan as the survey
  *
@@ -50,6 +50,8 @@ export function encodePlan({ waypoints = [], science = false, route, startMs, mi
     const d = mission.dust || {};
     const dk = ['outerLayer', 'joints', 'equipment', 'covers'].map(k => d[k] || 'unknown');
     if (dk.some(v => v !== 'unknown')) st.m.u = dk;
+    const ls = mission.lifeSupport;
+    if (ls && (ls.arch !== 'bvad-swingbed' || ls.walkLoad !== 'baseline')) st.m.o = [ls.arch, ls.walkLoad];
   }
   if (Number.isFinite(dwellMin)) st.d = dwellMin;
   if (typeof objective === 'string' && /^[a-z0-9-]{1,40}$/.test(objective)) st.o = objective;
@@ -100,6 +102,8 @@ export function decodePlan(search) {
         ? { payload: { instruments: st.m.p[0], comms: st.m.p[1], sampling: st.m.p[2], emergency: st.m.p[3] } } : {}),
       ...(Array.isArray(st.m.u) && st.m.u.length === 4 && st.m.u.every(v => typeof v === 'string' && /^[a-z]{1,16}$/.test(v))
         ? { dust: { outerLayer: st.m.u[0], joints: st.m.u[1], equipment: st.m.u[2], covers: st.m.u[3] } } : {}),
+      ...(Array.isArray(st.m.o) && st.m.o.length === 2 && st.m.o.every(v => typeof v === 'string' && /^[a-z-]{1,24}$/.test(v))
+        ? { lifeSupport: { arch: st.m.o[0], walkLoad: st.m.o[1] } } : {}),
     };
   }
   return out;

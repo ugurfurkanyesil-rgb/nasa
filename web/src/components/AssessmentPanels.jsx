@@ -4,6 +4,7 @@
  *   A. Payload & Mass                       utils/payloadAssessment.js
  *   B. Dust Exposure & Equipment Reliability utils/dustAssessment.js + config/dust.js
  *   C. Terrain & Mobility                   utils/mobilityAssessment.js
+ *   D. Life support — primary O₂            utils/oxygenBudget.js + config/lifeSupport.js
  * Presentational; values arrive computed.
  */
 import { useState } from 'react';
@@ -12,11 +13,13 @@ import { fmtHM, fmtSignedHM, fmtDist } from '../utils/format';
 import { PAYLOAD_ITEMS, ogilvieEq7, OGILVIE_URL } from '../utils/payloadAssessment';
 import { DUST_CONFIG, APPLICABILITY, DUST_SOURCES } from '../config/dust';
 import { Btn } from './MissionPanels';
+import { PLSS_ARCHS, WALK_LOADS } from '../config/lifeSupport';
+import { fmtKg } from '../utils/oxygenBudget';
 
 const T = { muted: '#7a8a7a', text: '#b8c8b0', bright: '#e8e0c8', warn: '#ffb347', bad: '#ff6655', good: '#88dd99', head: '#ffcc88' };
 const small = (px = 7) => ({ fontSize: fs(px), lineHeight: 1.5 });
 const RESULT_COL = { ok: T.good, PASS: T.good, over: T.bad, FAIL: T.bad, invalid: T.warn, 'NOT CHECKED': T.warn,
-  'INSUFFICIENT DATA': '#8899aa', CAUTION: T.warn };
+  'INSUFFICIENT DATA': '#8899aa', CAUTION: T.warn, OK: T.good, SHORTFALL: T.warn, 'NO CAPACITY': '#8899aa' };
 const LVL_COL = { low: T.good, moderate: T.warn, high: T.bad };
 
 function Head({ letter, title, result, text }) {
@@ -190,6 +193,56 @@ export function MobilityPanel({ mobility }) {
       <div style={{ ...small(6.4), color: '#7a6a4a' }}>
         Payload penalty: none — {mobility.payloadPenalty.reason} Dust penalty: none — {mobility.dustPenalty.reason}
       </div>
+    </div>
+  );
+}
+
+// ───────────────────────── D. Life support — primary O₂ ─────────────────────────
+export function LifeSupportPanel({ mission, setMission, oxygen: o, disabled }) {
+  const [showSrc, setShowSrc] = useState(false);
+  const ls = { arch: o.arch, walkLoad: o.walkLoad };
+  const set = (k, v) => setMission({ ...mission, lifeSupport: { ...ls, [k]: v } });
+  const text = o.result === 'OK' ? 'WITHIN PLAN' : o.result === 'SHORTFALL' ? 'SHORTFALL → CONDITIONAL' : o.result;
+  return (
+    <div style={{ opacity: disabled ? 0.5 : 1, pointerEvents: disabled ? 'none' : 'auto' }}>
+      <Head letter="D" title="Life support — primary O₂" result={o.result} text={text} />
+      <div style={{ ...small(6.8), color: T.muted }}>PLSS architecture (O₂ use depends on it more than on anything else):</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, margin: '2px 0' }}>
+        {Object.entries(PLSS_ARCHS).map(([k, a]) => (
+          <Btn key={k} active={o.arch === k} color="#88ccff" onClick={() => set('arch', k)} title={a.label}>{a.short}</Btn>
+        ))}
+      </div>
+      <div style={{ ...small(6.6), color: T.text }}>{PLSS_ARCHS[o.arch].label}. {PLSS_ARCHS[o.arch].note}</div>
+      <div style={{ display: 'flex', gap: 3, margin: '3px 0' }}>
+        {Object.entries(WALK_LOADS).map(([k, w]) => (
+          <Btn key={k} active={o.walkLoad === k} color={k === 'norcross' ? '#c39be8' : '#88ccff'} onClick={() => set('walkLoad', k)} title={w.note}>
+            {w.label}{w.status === 'assumption' ? ' (assumption)' : ''}
+          </Btn>
+        ))}
+      </div>
+      <Row k="O₂ rate (per crew member)" v={`${o.rateKgH} kg/h${o.walkFactor !== 1 ? ` · walking ×${o.walkFactor.toFixed(2)}` : ''}`} />
+      <div style={{ ...small(6.3), color: T.muted }}>{o.rateRef}</div>
+      <Row k="Planning capacity" v={o.capacityKg != null ? `${fmtKg(o.capacityKg)} (sized for ${o.sizedForH} h)` : 'NOT SOURCED'} c={o.capacityKg == null ? T.warn : undefined} />
+      {o.capacityRef && <div style={{ ...small(6.3), color: T.muted }}>{o.capacityRef}</div>}
+      {o.enduranceH != null && <Row k="O₂-limited time at base rate" v={`${o.enduranceH.toFixed(1)} h`} />}
+      {o.result === 'NOT CHECKED' ? <div style={{ ...small(7), color: '#3a5a3a' }}>{o.headline}</div> : <>
+        <Row k="O₂ for the whole EVA" v={`${fmtKg(o.totalKg)} · ${o.roundTripH.toFixed(2)} h`} />
+        {o.capacityKg != null && <Row k="Tightest return O₂ margin" v={Number.isFinite(o.minMarginKg) ? `${o.minMarginKg >= 0 ? '+' : '−'}${fmtKg(Math.abs(o.minMarginKg))}${o.o2PonrIdx >= 0 ? ' · O₂ POINT OF NO RETURN' : ''}` : 'NO PATH HOME'}
+          c={o.minMarginKg >= 0 ? T.good : T.warn} />}
+        <div style={{ ...small(6.8), color: T.text }}>{o.headline}</div>
+      </>}
+      {o.warnings.map(w => <div key={w.id} style={{ ...small(6.8), color: '#e8c890' }}>⚠ {w.text}</div>)}
+      {o.info.map((w, i) => <div key={w.id + i} style={{ ...small(6.4), color: T.muted }}>· {w.text}</div>)}
+      <div style={{ ...small(6.4), color: '#7a6a4a', marginTop: 2 }}>
+        O₂ = rate × time (stops + walking + the walk home), on the planner's own timeline. A shortfall is a warning, never a NO-GO.
+        {' '}<span onClick={() => setShowSrc(!showSrc)} style={{ color: '#9ab', cursor: 'pointer', textDecoration: 'underline' }}>{showSrc ? 'hide' : 'show'} sources</span>
+      </div>
+      {showSrc && o.sources.map(s => (
+        <div key={s.id} style={{ ...small(6.4), color: T.muted, marginLeft: 6, marginTop: 2 }}>
+          <div><a href={s.url} target="_blank" rel="noreferrer" style={{ color: '#9ab' }}>{s.title}</a> · {s.date}</div>
+          <div>{s.note}</div>
+        </div>
+      ))}
     </div>
   );
 }

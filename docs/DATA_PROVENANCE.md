@@ -49,7 +49,7 @@ A record never moves up a category. Transferred or derived information is never 
 
 ## Both sites: models and simulation
 
-Sun position and local time come from Mars24 (modelled). Suited walking time uses the xEVA pace with the Tobler slope shape (modelled). The hazard map is derived. EVA playback is simulated.
+Sun position and local time come from Mars24 (modelled). Suited walking time uses the xEVA pace with the Tobler slope shape (modelled). The hazard map is derived. EVA playback is simulated. Primary O₂ use is modelled: sourced per-architecture rates and planning capacities (BVAD REV2 2022, ICES-2025-090, ICES-2026-158) applied to the planner's timeline; the capacities are design-study planning values, not flight hardware ([docs/EVA_READINESS.md](EVA_READINESS.md#d-life-support--primary-o)).
 
 ## Missing-data investigation (Phase 4)
 

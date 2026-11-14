@@ -10,6 +10,7 @@ import RightPanel from './components/RightPanel';
 import EvaHud from './components/EvaHud';
 import { clearPathCache, getHazardAtPoint, isWallAt, fastestReturnPath, toHomeTimeAt } from './utils/pathfinder';
 import { getTerrainHeight, buildHeightMap, buildSlopeMap, buildCraterMask, IS_DEM, SITE } from './three/terrainGenerator';
+import { setLifeSupport } from './config/lifeSupport';
 import { param, placeholderParams, assumptionParams, MARSWALK_PROFILE, MARS_CAVEAT, SCIENCE_PARAMS, EVA_CREW, paramEntry, getEvaProfile, setEvaProfile, EVA_PROFILES, MARS_SUIT_COST_RATIO, setObstacleBufferM } from './config/marswalkProfile';
 import { objectivesForSite, objectiveSupport, getObjective } from './config/objectives';
 import { chemAnomalies } from './utils/chemistry';
@@ -201,6 +202,7 @@ export default function App() {
   // The active EVA limit set follows Mission setup; set before any planning in this render
   setEvaProfile(mission.limits || 'lunar');
   setObstacleBufferM(mission.obstacleBufferM || 0);
+  setLifeSupport(mission.lifeSupport);
   setHazardContext({ bufferM: mission.obstacleBufferM || 0, rover: mission.rover });
   // Mission objective (config/objectives.js): must be chosen before the science-stop planner runs.
   // Old shared links with a science plan but no objective re-plan as the original survey.

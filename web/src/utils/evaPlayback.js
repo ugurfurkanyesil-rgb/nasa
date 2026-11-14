@@ -261,6 +261,10 @@ export function evaSnapshot(pb) {
   const axisS = Math.max(1e-9, tl.totalS);
   const f = (x) => Math.max(0, Math.min(1, x / axisS));
   const reached = (st) => !pb.aborted || st.arriveS <= pb.aborted.t0;
+  // Time spent at stops so far (an abort ends any stop at the abort time) — O₂ HUD split
+  const tc = pb.aborted ? Math.min(t, pb.aborted.t0) : t;
+  let dwellDoneS = 0;
+  for (const st of nom.stops) dwellDoneS += Math.max(0, Math.min(tc, st.departS) - st.arriveS);
   return {
     status: pb.status,
     speed: pb.speed,
@@ -274,6 +278,7 @@ export function evaSnapshot(pb) {
     margin,
     backS: back,
     budgetS: meta.budgetS,
+    dwellDoneS,
     ponrPassed: pb.flags.ponr,
     distHomeM: Math.hypot(s.x - nom.xs[0], s.z - nom.zs[0]),
     walkedM: pb.aborted ? null : s.distM,

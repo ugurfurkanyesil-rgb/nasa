@@ -38,7 +38,8 @@ import { missionSummary } from '../utils/missionSummary';
 import { getSiteHazards, routeHazardsFor } from '../utils/siteHazards';
 import { HAZARD_LAYER } from '../utils/heatmaps';
 import { getEvaProfile, EVA_PROFILES as EVA_PROFILE_SETS } from '../config/marswalkProfile';
-import { PayloadPanel, DustPanel, MobilityPanel } from './AssessmentPanels';
+import { PayloadPanel, DustPanel, MobilityPanel, LifeSupportPanel } from './AssessmentPanels';
+import { assessOxygen } from '../utils/oxygenBudget';
 import { assessDust } from '../utils/dustAssessment';
 import { assessMobility } from '../utils/mobilityAssessment';
 import { routeSurface } from '../utils/siteHazards';
@@ -1195,10 +1196,11 @@ export default function RightPanel({
         radiationCategory: radRecord?.categories?.[0], rockLayer: !!SITE.layers?.rock,
         routeHazards: routeHazardsFor(r.path),
         dust: assessDust({ dust: mission.dust, rover: mission.rover, stats: r.stats, surface: routeSurface(r.path) }),
+        oxygen: assessOxygen(r.stats, { mission, profile: getEvaProfile() }),
       });
     }
     return out;
-  }, [routes, sw, swState, radRecord, hazards, mission.dust, mission.rover]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [routes, sw, swState, radRecord, hazards, mission.dust, mission.rover, mission.lifeSupport, mission.limits]); // eslint-disable-line react-hooks/exhaustive-deps
   // ---- EVA readiness: three independent assessments (payload, dust, terrain & mobility) ----
   const payloadA = carryCheck(mission).payload;
   const activeR = routes?.[activeRoute];
@@ -1212,6 +1214,8 @@ export default function RightPanel({
     speedSource: getEvaProfile() === 'mars' ? 'Norcross et al. 2009, suited cost ×1.65' : 'NASA xEVA ConOps (lunar)',
     routeHazards: routeHazardsFor(activeR.path),
   }) : assessMobility(null)), [activeR, activeDem, evaluations, activeRoute]); // eslint-disable-line react-hooks/exhaustive-deps
+  const oxygenA = useMemo(() => assessOxygen(activeDem ? activeR.stats : null, { mission, profile: getEvaProfile() }),
+  [activeR, activeDem, mission.lifeSupport, mission.limits]); // eslint-disable-line react-hooks/exhaustive-deps
   const stopCards = useMemo(() => {
     if (!IS_DEM || !science?.stops) return [];
     const obj = getObjective(science.objective);
@@ -1402,10 +1406,11 @@ export default function RightPanel({
         )}
 
         {IS_DEM && (
-        <Sect label="3b · EVA readiness — payload, dust, terrain (separate results)" id="readiness">
+        <Sect label="3b · EVA readiness — payload, dust, terrain, O₂ (separate results)" id="readiness">
           <PayloadPanel mission={mission} setMission={setMission} payload={payloadA} disabled={isRoving} />
           <DustPanel mission={mission} setMission={setMission} dust={dustA} disabled={isRoving} />
           <MobilityPanel mobility={mobilityA} />
+          <LifeSupportPanel mission={mission} setMission={setMission} oxygen={oxygenA} disabled={isRoving} />
         </Sect>
         )}
 
@@ -1697,6 +1702,13 @@ export default function RightPanel({
                     warnings: dustA.warnings.map(w => w.text), quantified: dustA.quantified },
                   mobility: { result: mobilityA.result, headline: mobilityA.headline, terrain: mobilityA.terrain, returnSafety: mobilityA.returnSafety,
                     payloadPenalty: mobilityA.payloadPenalty, dustPenalty: mobilityA.dustPenalty },
+                  lifeSupport: { result: oxygenA.result, headline: oxygenA.headline, architecture: oxygenA.arch, walkLoad: oxygenA.walkLoad,
+                    walkFactor: oxygenA.walkFactor, rateKgPerH: oxygenA.rateKgH, rateSource: oxygenA.rateRef,
+                    capacityKg: oxygenA.capacityKg, capacitySource: oxygenA.capacityRef, sizedForH: oxygenA.sizedForH,
+                    totalO2Kg: Number.isFinite(oxygenA.totalKg) ? oxygenA.totalKg : null,
+                    minMarginKg: Number.isFinite(oxygenA.minMarginKg) ? oxygenA.minMarginKg : null, o2PonrIdx: oxygenA.o2PonrIdx ?? null,
+                    secondaryO2: oxygenA.secondary, notes: [...oxygenA.warnings, ...oxygenA.info].map(w => w.text),
+                    sources: oxygenA.sources.map(s => ({ title: s.title, date: s.date, url: s.url })) },
                 },
               } : null);
               setExported(true);

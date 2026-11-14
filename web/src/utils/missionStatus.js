@@ -7,7 +7,8 @@
  *                      missing information is never counted as a pass
  *   CONDITIONAL        all hard constraints pass, but an environmental WARNING stands
  *                      (space weather unknown or an SEP near the date, thin margin vs the
- *                      Apollo 17 30-minute reserve) — go only after the condition is cleared
+ *                      Apollo 17 30-minute reserve, primary O₂ above the PLSS planning
+ *                      capacity) — go only after the condition is cleared
  *   GO                 all hard constraints pass and no warning stands
  *
  * Hard constraints decide; warnings condition; "info" items are context that never changes
@@ -41,6 +42,7 @@ const pass = (b) => (b === true ? 'pass' : b === false ? 'fail' : 'unknown');
  *   rockLayer: boolean                                    rock-relief layer loaded
  *   routeHazards: [{ flag, label, hard, share }]           hazardMap.routeHazards
  *   dust: dustAssessment result (warnings → cautions, never status-changing)
+ *   oxygen: oxygenBudget.assessOxygen result (shortfall → warning; notes → info)
  * }
  */
 export function evaluateMission(s, ctx = {}) {
@@ -110,6 +112,10 @@ export function evaluateMission(s, ctx = {}) {
   if (s.light?.shadowFrac > 0.05) info.push({ id: 'shadow', level: 'caution', label: `Terrain shadow ${(s.light.shadowFrac * 100).toFixed(0)} % of the walk`, text: 'Walking in shadow: colder, harder to see the ground.' });
   // Dust (utils/dustAssessment.js): CAUTIONS only — dust never turns a plan NO-GO or CONDITIONAL by itself
   for (const w of ctx.dust?.warnings || []) info.push({ id: w.id, level: 'caution', label: 'Dust', text: w.text });
+  // Life support (utils/oxygenBudget.js): an O₂ shortfall vs a design-study planning capacity is a
+  // WARNING (CONDITIONAL), not a hard fail — the capacity is not the tank of flight hardware.
+  for (const w of ctx.oxygen?.warnings || []) warnings.push(w);
+  for (const w of ctx.oxygen?.info || []) if (w.id === 'o2-4h' || w.id === 'o2-sized') info.push({ id: w.id, level: 'caution', label: 'Life support', text: w.text });
   for (const h of ctx.routeHazards || []) {
     if (h.hard || h.share < 0.005) continue;
     info.push({ id: 'haz' + h.flag, level: 'caution', label: `${h.label}: ${(h.share * 100).toFixed(0)} % of the route`, text: 'From the hazard map (advisory, not a wall).' });

@@ -13,7 +13,9 @@ import { evaSnapshot, SPEEDS } from '../utils/evaPlayback';
 import { fmtClock, fmtHM, fmtSignedHM, fmtHourMin, fmtDist } from '../utils/format';
 import { K_TO_C, climateInstrument } from '../utils/climate';
 import { SITE } from '../three/terrainGenerator';
-import { param } from '../config/marswalkProfile';
+import { param, getEvaProfile } from '../config/marswalkProfile';
+import { getLifeSupport, PLSS_ARCHS, oxygenKg } from '../config/lifeSupport';
+import { fmtKg } from '../utils/oxygenBudget';
 import { evaDoseMSv } from '../utils/radiation';
 
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
@@ -138,6 +140,11 @@ export default function EvaHud({ playback, right = 12, narrow = false, compact =
   const sun = snap.sun, air = snap.air;
   const lastEvent = snap.events[snap.events.length - 1];
   const canAbort = !snap.aborted && (snap.status === 'playing' || snap.status === 'paused');
+  // Primary O₂ used so far (config/lifeSupport.js planning rate; stops vs walking split)
+  const ls = getLifeSupport(), arch = PLSS_ARCHS[ls.arch];
+  const dwellS = snap.dwellDoneS || 0;
+  const o2 = oxygenKg(ls, getEvaProfile(), dwellS, snap.t - dwellS);
+  const o2Cap = arch.capacity?.kg ?? null;
 
   return (
     <div id="eva-hud" style={{
@@ -190,6 +197,10 @@ export default function EvaHud({ playback, right = 12, narrow = false, compact =
             ? `${climateInstrument(SITE.climate)} p10–p90: ${K_TO_C(air.p10).toFixed(0)}…${K_TO_C(air.p90).toFixed(0)} °C` : air ? `${climateInstrument(SITE.climate)} climatology` : 'no climate data'}>
           {sun ? (sun.elevationDeg > 0 ? `${sun.elevationDeg.toFixed(0)}°` : 'night') : '—'}
           {air ? <span style={{ color: '#ffcc88' }}> · {K_TO_C(air.median).toFixed(0)} °C</span> : null}
+        </Tile>
+        <Tile compact={compact} label="O₂ USED (PLAN)" color={o2Cap != null && o2 > o2Cap ? '#ff5a4a' : '#e8e0c8'}
+          sub={o2Cap != null ? `of ${fmtKg(o2Cap)} · ${arch.short}` : `${arch.rateKgH} kg/h · no capacity`}>
+          {fmtKg(o2)}
         </Tile>
         <Tile compact={compact} label="DOSE (GCR)" sub="Curiosity RAD rate">
           {evaDoseMSv(snap.t).toFixed(3)} mSv
